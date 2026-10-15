@@ -3,7 +3,6 @@
 // distance (never popped), colliders for the instances near the road, and the start and finish
 // gantries. Nothing is baked: tools/convert/stage.mjs and the Blender exporters make the inputs.
 import * as THREE from 'three/webgpu';
-import { attribute, cos, positionLocal, sin, vec3 } from 'three/tsl';
 import type RAPIER from '@dimforge/rapier3d-compat';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
@@ -11,6 +10,7 @@ import { assetUrl } from '../data';
 import { Road, type RoadData } from '../sim/road';
 import type { SurfaceQuery } from '../sim/vehicle';
 import type { Surface } from '../sim/tuning';
+import { instanceMaterials, propMaterials, terrainMaterials } from '../look/materials';
 
 export interface StageJson {
   id: string;
@@ -65,48 +65,16 @@ const SLOT_SURFACE: Record<string, Surface> = {
 
 const slotName = (m: THREE.Material) => m.name.replace(/\.\d+$/, '');
 
-/** Materials for the slots: untextured, flat-shaded, vertex colour (the look slice refines them). */
+/**
+ * Materials for the slots (src/look/materials.ts). Instances are plain meshes on an
+ * InstancedBufferGeometry with two per-instance attributes, inst_a = (x, y, z, scale) and
+ * inst_b = (rotY, fade, hue shift deg, value delta), placed by the material's positionNode;
+ * `fade` (0..1, written each update) dithers them in. Not InstancedMesh: three keeps up to 1024
+ * instance matrices in a uniform block named after the node, so every chunk compiled its own
+ * vertex program (2200 programs, 8-45 s of hitches).
+ */
 function makeMaterials() {
-  const ground = (roughness: number) => {
-    const m = new THREE.MeshStandardNodeMaterial({ vertexColors: true, flatShading: true, roughness, metalness: 0 });
-    return m;
-  };
-  const tiles: Record<string, THREE.Material> = {
-    Grass: ground(1), Gravel: ground(0.95), Tarmac: ground(0.8), Line: ground(0.8), Dirt: ground(0.95),
-    Rock: ground(0.9), Snow: ground(0.7), Flat: ground(0.85),
-    Water: new THREE.MeshStandardNodeMaterial({ vertexColors: true, flatShading: true, roughness: 0.15, transparent: true, opacity: 0.8 }),
-  };
-  // Instances are plain meshes on an InstancedBufferGeometry with two per-instance attributes:
-  //   inst_a = (x, y, z, scale), inst_b = (rotY, fade, tint value).
-  // The shader places them; `fade` (0..1, written each update) dithers them in with hashed alpha.
-  // Not InstancedMesh: three keeps up to 1024 instance matrices in a uniform block named after the
-  // node, so every chunk compiled its own vertex program (2200 programs, 8-45 s of hitches).
-  const ia = attribute('inst_a', 'vec4');
-  const ib = attribute('inst_b', 'vec3');
-  const local = positionLocal.mul(ia.w);
-  const c = cos(ib.x), sn = sin(ib.x);
-  // rotation about +Y by rotY (three's makeRotationY), then the instance position
-  const placed = vec3(local.x.mul(c).add(local.z.mul(sn)), local.y, local.z.mul(c).sub(local.x.mul(sn))).add(ia.xyz);
-  const fading = (props: ConstructorParameters<typeof THREE.MeshStandardNodeMaterial>[0]) => {
-    const m = new THREE.MeshStandardNodeMaterial({ vertexColors: true, flatShading: true, metalness: 0, ...props });
-    m.positionNode = placed;
-    m.colorNode = vec3(ib.z);
-    m.alphaHash = true;
-    m.opacityNode = ib.y;
-    return m;
-  };
-  const instances: Record<string, THREE.Material> = {
-    Flat: fading({ roughness: 0.85 }),
-    Foliage: fading({ roughness: 0.9, side: THREE.DoubleSide }),
-    Glow: fading({ roughness: 0.6 }),
-  };
-  // single placed props (the gantries): ordinary meshes
-  const plain = (props: ConstructorParameters<typeof THREE.MeshStandardNodeMaterial>[0]) =>
-    new THREE.MeshStandardNodeMaterial({ vertexColors: true, flatShading: true, metalness: 0, ...props });
-  const props: Record<string, THREE.Material> = {
-    Flat: plain({ roughness: 0.85 }), Foliage: plain({ roughness: 0.9, side: THREE.DoubleSide }), Glow: plain({ roughness: 0.6 }),
-  };
-  return { tiles, instances, props };
+  return { tiles: terrainMaterials(), instances: instanceMaterials(), props: propMaterials() };
 }
 
 /** COLOR_0 is RGBA (alpha = sway weight on vegetation): keep RGB as the colour, alpha as `sway`. */
@@ -134,7 +102,7 @@ interface InstanceGroup {
   ids: Uint32Array; // instance ids in the stage's instance table
   parts: THREE.Mesh<THREE.InstancedBufferGeometry>[]; // one per material slot, sharing the instance attributes
   a: THREE.InstancedBufferAttribute; // x, y, z, scale
-  b: THREE.InstancedBufferAttribute; // rotY, fade, tint
+  b: THREE.InstancedBufferAttribute; // rotY, fade, hue shift (deg), value delta
 }
 
 export class Stage {
@@ -142,7 +110,8 @@ export class Stage {
   readonly road: Road;
   surfaceAt!: SurfaceQuery;
   private groups: InstanceGroup[] = [];
-  private tints!: Float32Array; // value multiplier per instance
+  private hue!: Float32Array; // per-instance hue shift (deg) and value delta (×(1+d)), from the catalog's tint ranges
+  private val!: Float32Array;
   // collider handle -> surface. One trimesh per tile and surface: Rapier 0.21's ray casts report
   // Face(0) for every trimesh hit, not the triangle index, so a per-triangle table can't be used.
   private colliderSurface = new Map<number, Surface>();
@@ -253,8 +222,20 @@ export class Stage {
           f[i * 3 + 2] = pos.getZ(i);
         }
         g.setAttribute('position', new THREE.BufferAttribute(f, 3));
+        const nrm = g.getAttribute('normal');
+        if (nrm) {
+          // foliage keeps its canopy normals (quantized): float them too, applyMatrix4 renormalizes
+          const nf = new Float32Array(nrm.count * 3);
+          for (let i = 0; i < nrm.count; i++) {
+            nf[i * 3] = nrm.getX(i);
+            nf[i * 3 + 1] = nrm.getY(i);
+            nf[i * 3 + 2] = nrm.getZ(i);
+          }
+          g.setAttribute('normal', new THREE.BufferAttribute(nf, 3));
+        }
         g.applyMatrix4(m.matrixWorld);
         splitColour(g);
+        if (!g.getAttribute('sway')) g.setAttribute('sway', new THREE.BufferAttribute(new Float32Array(pos.count), 1));
         g.computeBoundingSphere();
         parts.push({ geometry: g, slot: slotName(m.material as THREE.Material) });
       });
@@ -272,22 +253,28 @@ export class Stage {
     const bin = this.bin;
     const n = bin.length / F;
     this.stats.instances = n;
-    this.tints = new Float32Array(n).fill(1);
+    this.hue = new Float32Array(n);
+    this.val = new Float32Array(n);
     const p = new THREE.Vector3();
     const nearRoad = this.runtime.collision_near_road_cm / 100;
-    const all = { ...this.json.bin.instances, ...this.json.bin.breakables };
-    const breakables = new Set(Object.keys(this.json.bin.breakables));
-    for (const [mesh, [offset, count]] of Object.entries(all)) {
+    // two tables that share mesh names (SM_Bush_A is scenery and, near the road, a breakable): walk
+    // both. Merging them as one object let the breakables replace every scenery bush and juniper.
+    const tables = [
+      ...Object.entries(this.json.bin.instances).map(([mesh, r]) => [mesh, r, false] as const),
+      ...Object.entries(this.json.bin.breakables).map(([mesh, r]) => [mesh, r, true] as const),
+    ];
+    for (const [mesh, [offset, count], breakable] of tables) {
       const cat = this.catalog[mesh];
       const parts = this.envGeoms.get(mesh);
       if (!cat || !parts) {
         console.warn(`stage ${this.json.id}: no mesh or catalog entry for ${mesh}`);
         continue;
       }
-      // tint: a value shift per instance (the look slice adds the hue shift)
+      // tint: hue = (t − 0.5)·2·tint_hue_deg, value = (t − 0.5)·2·tint_value, t from the instance table
       for (let i = offset; i < offset + count; i++) {
         const t = cat.tintable ? (bin[i * F + 5] - 0.5) * 2 : 0;
-        this.tints[i] = 1 + t * (cat.tint_value ?? 0);
+        this.hue[i] = t * (cat.tint_hue_deg ?? 0);
+        this.val[i] = t * (cat.tint_value ?? 0);
       }
       // chunk by terrain tile
       const chunks = new Map<string, number[]>();
@@ -312,7 +299,7 @@ export class Stage {
         const cap = ids.length;
         const a = new THREE.InstancedBufferAttribute(new Float32Array(cap * 4), 4);
         a.setUsage(THREE.DynamicDrawUsage);
-        const b = new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3);
+        const b = new THREE.InstancedBufferAttribute(new Float32Array(cap * 4), 4);
         b.setUsage(THREE.DynamicDrawUsage);
         const meshes: THREE.Mesh<THREE.InstancedBufferGeometry>[] = [];
         for (const part of parts) {
@@ -339,7 +326,10 @@ export class Stage {
         });
       }
       // colliders for instances near the road (breakables come apart instead, in a later slice)
-      if (cat.collision !== 'none' && !breakables.has(mesh)) {
+      // Meshes that are also breakables (bushes, junipers) get no colliders at all, scenery included: that
+      // is what slice 4 shipped (the merge bug hid them), kept so the look slice leaves the sim untouched.
+      // Whether scenery bushes by the road should block the car is a handling question for later.
+      if (cat.collision !== 'none' && !breakable && !(mesh in this.json.bin.breakables)) {
         const tc = performance.now();
         for (let i = offset; i < offset + count; i++) {
           const x = bin[i * F], y = bin[i * F + 1], z = bin[i * F + 2];
@@ -420,9 +410,10 @@ export class Stage {
     A[k * 4 + 1] = bin[i * F + 1];
     A[k * 4 + 2] = bin[i * F + 2];
     A[k * 4 + 3] = bin[i * F + 4];
-    B[k * 3] = bin[i * F + 3];
-    B[k * 3 + 1] = fade;
-    B[k * 3 + 2] = this.tints[i];
+    B[k * 4] = bin[i * F + 3];
+    B[k * 4 + 1] = fade;
+    B[k * 4 + 2] = this.hue[i];
+    B[k * 4 + 3] = this.val[i];
   }
 
   private lastUpdate = new THREE.Vector3(1e9, 0, 0);
@@ -453,7 +444,7 @@ export class Stage {
         }
         if (k) {
           // upload only the compacted front of each buffer
-          for (const [a, size] of [[g.a, 4], [g.b, 3]] as const) {
+          for (const [a, size] of [[g.a, 4], [g.b, 4]] as const) {
             a.clearUpdateRanges();
             a.addUpdateRange(0, k * size);
             a.needsUpdate = true;

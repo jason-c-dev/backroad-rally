@@ -4,7 +4,9 @@
 //   node tools/convert/glb.mjs <in.glb> [out.glb] [--keep-normals]
 //
 // Flat-shaded, untextured meshes: the per-face normals are dropped (the materials flat-shade
-// from screen-space derivatives), identical vertices are welded, attributes quantized
+// from screen-space derivatives), except on `Foliage` primitives: leaf chips and canopy blobs
+// carry custom canopy-sphere normals so a canopy shades as one soft volume (the vertex colours
+// carry the speckle). Identical vertices are welded, attributes quantized
 // (KHR_mesh_quantization) and the buffers meshopt-compressed (EXT_meshopt_compression).
 // Positions keep 14 bits: about 1.5 cm on a 256 m terrain tile, well under a car's tyre.
 import { NodeIO, PropertyType } from '@gltf-transform/core';
@@ -32,7 +34,7 @@ if (!keepNormals) {
   for (const mesh of doc.getRoot().listMeshes()) {
     for (const prim of mesh.listPrimitives()) {
       const n = prim.getAttribute('NORMAL');
-      if (n) {
+      if (n && !(prim.getMaterial()?.getName() ?? '').startsWith('Foliage')) {
         prim.setAttribute('NORMAL', null);
         if (n.listParents().length <= 1) n.dispose();
       }

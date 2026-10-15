@@ -9,7 +9,7 @@ import { ChaseCamera } from './camera/chaseCamera';
 import { Controls } from './input/controls';
 import { FrameHud } from './hud/frameHud';
 import { StageHud } from './hud/stageHud';
-import { posM, yaw } from './ue';
+import { posM } from './ue';
 import { createWorld, initPhysics } from './sim/physics';
 import { buildTestTrackPhysics } from './sim/testTrackPhysics';
 import { loadCarTuning } from './sim/tuning';
@@ -19,6 +19,9 @@ import { createArcade } from './sim/arcade';
 import { DEFAULT_RULES, RoadTracker } from './sim/road';
 import { StageRun, DEFAULT_FLOW, type FlowConfig } from './game/stageRun';
 import { Autopilot, DEFAULT_AUTOPILOT } from './game/autopilot';
+import { Look } from './look/look';
+import { CONDITIONS, pickCondition, type ConditionsJson } from './look/conditions';
+import { pickQuality } from './look/post';
 
 const params = new URLSearchParams(location.search);
 /** Headless runs: ?timescale=4 runs the game (physics, flow, camera) four times faster than the clock. */
@@ -26,11 +29,21 @@ const timeScale = Math.min(Math.max(Number(params.get('timescale') ?? 1) || 1, 0
 
 /** Per-frame costs for tools/check (ms): read through window.__br.perf. */
 const perf = {
-  frames: [] as { dt: number; step: number; inst: number; render: number; calls: number; tris: number; visible: number }[],
+  frames: [] as { dt: number; step: number; inst: number; render: number; calls: number; tris: number; visible: number; gpu: number }[],
+  /** GPU time of the last resolved frame (ms), with ?gputime (timer queries; may be unavailable). */
+  gpu: 0,
   reset() {
     this.frames.length = 0;
   },
 };
+
+interface DofJson {
+  fstop: number;
+  ref_distance_cm: number;
+  focus_offset_cm: number;
+  post?: { DepthOfFieldSensorWidth?: number };
+  by_weather?: Record<string, { fstop_scale?: number; focus_offset_cm?: number }>;
+}
 
 /** What the game loop needs from the place it drives in: the test bench or a stage. */
 interface Level {
@@ -50,48 +63,30 @@ async function main() {
   const app = document.getElementById('app')!;
 
   // WebGPU with its built-in WebGL2 fallback; ?webgl forces the fallback for testing.
-  const renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL: params.has('webgl') });
+  const renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL: params.has('webgl'), trackTimestamp: params.has('gputime') });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.setSize(innerWidth, innerHeight);
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.0;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFShadowMap; // PCFSoft is gone from WebGPURenderer (it warns and falls back)
   await renderer.init();
   app.appendChild(renderer.domElement);
   const backend = (renderer.backend as { isWebGPUBackend?: boolean }).isWebGPUBackend ? 'webgpu' : 'webgl2';
+  // ?hud=0 hides every overlay (look comparisons)
+  if (params.get('hud') === '0') document.body.classList.add('no-hud');
 
   const carId = params.get('car') ?? 'swift';
   const stageId = params.get('stage') ?? 'finland';
   const reverse = params.get('dir') === 'reverse';
-  const [camCfg, car, tuningJson, rapier] = await Promise.all([
-    load<CameraData>('camera.json'),
+  const [camCfg, car, tuningJson, rapier, conditions] = await Promise.all([
+    load<CameraData & { dof: DofJson }>('camera.json'),
     loadCar(carId),
     load<Record<string, unknown>>('cars_tuning.json'),
     initPhysics(),
+    load<ConditionsJson>('conditions.json'),
   ]);
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color('#B6C7D5');
   const world = createWorld(rapier);
-
-  // sun and sky (the look slice brings conditions.json)
-  const sun = new THREE.DirectionalLight(new THREE.Color(1, 0.94, 0.86), 3.2);
-  const sunPitch = (-50 * Math.PI) / 180;
-  const sunDir = new THREE.Vector3(Math.cos(sunPitch), 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw(125));
-  sunDir.y = Math.sin(sunPitch);
-  sunDir.normalize();
-  sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
-  const sc = sun.shadow.camera;
-  sc.left = sc.bottom = -60;
-  sc.right = sc.top = 60;
-  sc.near = 1;
-  sc.far = 400;
-  sun.shadow.bias = -0.0005;
-  sun.shadow.normalBias = 0.03;
-  scene.add(sun, sun.target);
-  scene.add(new THREE.HemisphereLight('#D8E4F0', '#5A6E48', 1.1));
 
   const hudRoot = document.body;
   let vehicle!: Vehicle;
@@ -127,13 +122,41 @@ async function main() {
   (level as { attach?: (a: typeof arcade, respawn: () => void) => void }).attach?.(arcade, spawn);
 
   const chase = new ChaseCamera(camCfg, innerWidth / innerHeight);
-  // build every pipeline now rather than mid-run (the loading curtain will cover this)
+
+  // the look (slice 5): conditions, fog, shadows, post. ?cond=morning|afternoon|sunset|night|fog (or stage),
+  // ?post=0 (P toggles), ?quality=low|medium|high
+  const dof = camCfg.dof;
+  let condIndex = Math.max(0, CONDITIONS.indexOf(pickCondition(conditions, params.get('cond'), stageId, reverse) as (typeof CONDITIONS)[number]));
+  const look = new Look(renderer, scene, chase.camera, conditions, {
+    stage: stageId,
+    condition: CONDITIONS[condIndex],
+    quality: pickQuality(params.get('quality'), innerWidth * innerHeight * renderer.getPixelRatio() ** 2),
+    post: params.get('post') !== '0',
+    shadowMap: Number(params.get('shadowmap') ?? 2048),
+    shadowFar: params.has('shadowfar') ? Number(params.get('shadowfar')) : undefined,
+    override: Object.fromEntries(([['ao', 'ao'], ['aosamples', 'aoSamples'], ['dof', 'dofTaps'], ['msaa', 'msaa'], ['bloom', 'bloom'], ['cascades', 'cascades'], ['hlshadow', 'headlightShadows']] as const)
+      .filter(([k]) => params.has(k)).map(([k, key]) => [key, key === 'bloom' || key === 'headlightShadows' ? params.get(k) !== '0' : Number(params.get(k))])),
+    dof: {
+      fstop: dof.fstop, refDistance: dof.ref_distance_cm / 100, focusOffset: dof.focus_offset_cm / 100,
+      clearFocusOffset: (dof.by_weather?.clear?.focus_offset_cm ?? dof.focus_offset_cm) / 100,
+      clearFstopScale: dof.by_weather?.clear?.fstop_scale ?? 1, sensorWidth: (dof.post?.DepthOfFieldSensorWidth ?? 36) / 1000,
+      scale: Number(params.get('dofscale') ?? 1) || 1,
+    },
+  }, { root: model.root, headlightPosCm: (car as unknown as { headlight_pos_cm: number[][] }).headlight_pos_cm });
+  look.setCondition(CONDITIONS[condIndex]);
+  // dev keys: P post on/off, K next condition
+  addEventListener('keydown', (e) => {
+    if (e.code === 'KeyP') look.setPost(!look.post.enabled);
+    if (e.code === 'KeyK') look.setCondition(CONDITIONS[(condIndex = (condIndex + 1) % CONDITIONS.length)]);
+  });
+  // place the camera, then build every pipeline now rather than mid-run (the loading curtain will cover this)
+  chase.update(0, { position: sim.renderPos, forward: new THREE.Vector3(1, 0, 0).applyQuaternion(sim.renderRot), velocity: vehicle.velocity });
+  look.update(0, sim.renderPos, innerWidth, innerHeight);
   const stageOf = (level as { stage?: Stage }).stage;
-  if (stageOf) {
-    const t0 = performance.now();
-    stageOf.warmup(() => renderer.render(scene, chase.camera));
-    stageOf.timings.warmup = performance.now() - t0;
-  }
+  const t0 = performance.now();
+  if (stageOf) stageOf.warmup(() => look.render());
+  else look.render();
+  if (stageOf) stageOf.timings.warmup = performance.now() - t0;
   const controls = new Controls();
   const hud = new FrameHud(document.body, backend);
 
@@ -144,7 +167,7 @@ async function main() {
   });
 
   // read-only handle for tools/check (headless runs)
-  (window as unknown as { __br: object }).__br = { vehicle, chase, model, sim, level, renderer, perf, backend, carId };
+  (window as unknown as { __br: object }).__br = { vehicle, chase, model, sim, level, renderer, perf, backend, carId, look, gpu: gpuName(renderer) };
 
   let liveryIndex = 0;
   let last = performance.now();
@@ -168,20 +191,25 @@ async function main() {
 
     camState.forward.set(1, 0, 0).applyQuaternion(sim.renderRot);
     chase.update(dt, camState);
-    sun.target.position.copy(sim.renderPos);
-    sun.position.copy(sim.renderPos).addScaledVector(sunDir, -200);
+    const c = renderer.domElement;
+    look.update(dt, sim.renderPos, c.width, c.height);
 
     const gear = vehicle.gear < 0 ? 'r' : String(vehicle.gear);
     hud.extra = `${car.name} · ${level.info()} · ${Math.abs(vehicle.forwardSpeedKmh).toFixed(0)} km/h · gear ${gear}` +
       ` · traction assist ${vehicle.tractionAssist ? 'on' : 'off'} · camera ${chase.presetName} · ${controls.device}` +
-      `\nw s a d drive · space handbrake · r recover · t traction assist · c camera · l livery · enter restart`;
+      `\n${look.cond.name} · post ${look.post.enabled ? 'on' : 'off'} · quality ${look.qualityName}` +
+      `\nw s a d drive · space handbrake · r recover · t traction assist · c camera · l livery · enter restart · k time of day · p post`;
     const r0 = performance.now();
-    renderer.render(scene, chase.camera);
+    look.render();
     const info = renderer.info.render as unknown as { drawCalls: number; triangles: number };
     perf.frames.push({ dt: frameDt, step: sim.lastStepMs, inst: level.instMs ?? 0, render: performance.now() - r0,
-      calls: info.drawCalls, tris: info.triangles, visible: level.visible?.() ?? 0 });
+      calls: info.drawCalls, tris: info.triangles, visible: level.visible?.() ?? 0, gpu: perf.gpu });
+    if (params.has('gputime')) {
+      void renderer.resolveTimestampsAsync('render').then((ms) => {
+        if (typeof ms === 'number' && ms > 0) perf.gpu = ms;
+      });
+    }
     if (perf.frames.length > 100000) perf.frames.splice(0, 50000);
-    const c = renderer.domElement;
     hud.frame(now, c.width, c.height);
   });
 }
@@ -198,7 +226,6 @@ async function buildStageLevel(id: string, reverse: boolean, rapier: typeof RAPI
   const named = ['near', 'medium', 'far', 'max'].indexOf(draw ?? '');
   if (draw) stage.drawDistance = named >= 0 ? runtime.draw_distance.scale.default[named] : Number(draw) || stage.drawDistance;
   scene.add(stage.group);
-  scene.fog = new THREE.Fog('#B6C7D5', 250, 1400);
   const v = stage.json.variants[reverse ? 'reverse' : 'forward'];
   const rules = {
     ...DEFAULT_RULES,
@@ -282,6 +309,17 @@ async function buildStageLevel(id: string, reverse: boolean, rapier: typeof RAPI
   };
   Object.assign(level, { tracker, stage, autopilot: ap });
   return level;
+}
+
+/** The GPU the page landed on (hybrid laptops: headless Chrome picks the integrated one unless told). */
+function gpuName(renderer: THREE.WebGPURenderer): string {
+  const b = renderer.backend as { gl?: WebGL2RenderingContext; adapter?: { info?: { vendor?: string; architecture?: string; description?: string } } };
+  if (b.gl) {
+    const ext = b.gl.getExtension('WEBGL_debug_renderer_info');
+    return ext ? String(b.gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : 'webgl2';
+  }
+  const i = b.adapter?.info;
+  return i ? [i.vendor, i.architecture, i.description].filter(Boolean).join(' ') : 'webgpu';
 }
 
 main().catch((e) => {
