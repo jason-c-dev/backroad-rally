@@ -29,6 +29,7 @@ const FILES = [
   'input.json',
   'env_catalog.json',
   'stage_runtime.json',
+  'conditions.json',
   ...['swift', 'pip', 'lama', 'quint', 'kaze'].map((id) => `cars/${id}.json`),
 ];
 

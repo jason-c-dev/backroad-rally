@@ -6,6 +6,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { CarData, Livery } from '../data';
 import { assetUrl } from '../data';
 import { cm } from '../ue';
+import { carMaterial } from '../look/materials';
 
 export type WheelKey = 'fl' | 'fr' | 'rl' | 'rr';
 export const WHEELS: WheelKey[] = ['fl', 'fr', 'rl', 'rr'];
@@ -19,28 +20,6 @@ export interface CarModel {
   pose(steer: number, wheels: { angle: number; compression: number }[]): void;
 }
 
-function slotMaterial(slot: string): THREE.MeshStandardMaterial {
-  const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6, metalness: 0 });
-  m.name = slot;
-  switch (slot) {
-    case 'Glass':
-      m.roughness = 0.15;
-      break;
-    case 'Chrome':
-      m.roughness = 0.25;
-      m.metalness = 0.8;
-      break;
-    case 'Tyre':
-      m.roughness = 0.95;
-      break;
-    case 'LightFront':
-    case 'LightRear':
-      m.roughness = 0.3;
-      break;
-  }
-  return m;
-}
-
 const loader = new GLTFLoader();
 
 export async function loadCarModel(car: CarData): Promise<CarModel> {
@@ -49,13 +28,13 @@ export async function loadCarModel(car: CarData): Promise<CarModel> {
   root.name = car.id;
   root.add(gltf.scene);
 
-  const mats = new Map<string, THREE.MeshStandardMaterial>();
+  const mats = new Map<string, THREE.MeshStandardNodeMaterial>();
   gltf.scene.traverse((o) => {
     const mesh = o as THREE.Mesh;
     if (!mesh.isMesh) return;
     const old = mesh.material as THREE.Material;
     const slot = old.name;
-    if (!mats.has(slot)) mats.set(slot, slotMaterial(slot));
+    if (!mats.has(slot)) mats.set(slot, carMaterial(slot));
     mesh.material = mats.get(slot)!;
     old.dispose();
     mesh.castShadow = true;

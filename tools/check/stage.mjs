@@ -5,7 +5,7 @@
 //   node tools/check/stage.mjs [--stage finland] [--cars swift,pip,lama,quint,kaze] [--dirs fwd,rev]
 //        [--kmh 120] [--minturn 0.3] [--keys 0|1|2] [--timescale 4] [--size 1280x534] [--webgl]
 //        [--shots 0.25,0.5,0.75] [--perf] [--seconds N] [--draw 2] [--out dir]
-//        [--url http://localhost:4173/backroad-rally/] [--chrome /path/to/chrome]
+//        [--cond afternoon] [--params "post=0"] [--url http://localhost:4173/backroad-rally/] [--chrome /path/to/chrome]
 //
 // --perf runs at real time (timescale 1) and prints frame-time statistics: mean, p95, p99 and worst
 // frame, physics, updateInstances and render-submit costs, draw calls and visible instances.
@@ -50,6 +50,8 @@ for (const car of cars) {
     if (dir === 'rev') q.set('dir', 'reverse');
     if (has('--webgl')) q.set('webgl', '');
     if (draw) q.set('draw', draw);
+    if (arg('--cond', '')) q.set('cond', arg('--cond', ''));
+    for (const [k, v] of new URLSearchParams(arg('--params', ''))) q.set(k, v);
     const url = `${base}?${q}`;
     const page = await browser.newPage({ viewport: { width: w, height: h } });
     const errors = [];
@@ -134,6 +136,7 @@ for (const car of cars) {
       };
       row.frames = frames.length;
       row.perf = { dt: stat('dt'), step: stat('step'), inst: stat('inst'), render: stat('render'), calls: stat('calls'), tris: stat('tris'), visible: stat('visible') };
+      if (frames.some((f) => f.gpu > 0)) row.perf.gpu = stat('gpu'); // with --params gputime
       row.spikes = frames.filter((f) => f.dt > 25).length;
     }
     rows.push(row);

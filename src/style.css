@@ -33,3 +33,4 @@ body { font-family: system-ui, sans-serif; }
 #stage-hud .hud-card .big { font-size: 34px; font-weight: 600; }
 #stage-hud .hud-card .huge { font-size: 72px; font-weight: 700; line-height: 1; }
 #stage-hud .hud-dip { position: absolute; inset: 0; background: #fff; opacity: 0; }
+body.no-hud #frame-hud, body.no-hud #stage-hud { display: none; }
