@@ -8,4 +8,6 @@ names and home paths, and check before every push.
 gitignored, with its own git history in `private/`).
 
 - Work on branches; open PRs with `gh pr create`. Never push to `main`.
-- Assets and data are converted from the original project at build time; see the handoff.
+- **All development happens in this folder.** The original UE project (`../BackroadRally/`) is a
+  **read-only reference**: read its docs, data, art and audio, and convert from it into this repo,
+  but never edit, build, commit to or run tools that write inside it.
