@@ -2,6 +2,7 @@
   --paper: #e0d9cc;
   --ink: #050506;
   --panel: #ffffffc7;
+  --accent: #db1f0f;
 }
 html, body { margin: 0; height: 100%; overflow: hidden; background: var(--paper); color: var(--ink); }
 body { font-family: system-ui, sans-serif; }
@@ -12,3 +13,23 @@ body { font-family: system-ui, sans-serif; }
   font: 12px/1.4 ui-monospace, monospace; font-variant-numeric: tabular-nums; pointer-events: none;
 }
 #fatal { top: auto; bottom: 8px; color: #db1f0f; white-space: pre-wrap; }
+
+/* stage HUD (slice 4; hud.json layout comes with game flow) */
+#stage-hud { position: fixed; inset: 0; pointer-events: none; font-variant-numeric: tabular-nums; text-transform: lowercase; }
+#stage-hud .hud-timer { position: absolute; top: 16px; right: 20px; display: flex; flex-direction: column; align-items: flex-end;
+  background: var(--panel); padding: 6px 12px; border-radius: 6px; }
+#stage-hud .hud-timer .t { font-size: 28px; font-weight: 600; }
+#stage-hud .hud-timer .pen { font-size: 14px; color: var(--accent); min-height: 1em; }
+#stage-hud .hud-timer .pen.pop { font-weight: 700; }
+#stage-hud .hud-progress { position: absolute; left: 20px; top: 25%; height: 50%; width: 6px; background: var(--panel); border-radius: 3px; overflow: hidden; }
+#stage-hud .hud-progress .fill { position: absolute; bottom: 0; width: 100%; background: var(--ink); }
+#stage-hud .hud-speed { position: absolute; right: 20px; bottom: 16px; background: var(--panel); padding: 4px 12px; border-radius: 6px; }
+#stage-hud .hud-speed .v { font-size: 32px; font-weight: 600; }
+#stage-hud .hud-speed .u { font-size: 13px; margin-left: 4px; }
+#stage-hud .hud-gear { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); background: var(--panel);
+  padding: 4px 14px; border-radius: 6px; font-size: 26px; font-weight: 600; }
+#stage-hud .hud-card { position: absolute; left: 50%; top: 38%; transform: translate(-50%, -50%); text-align: center;
+  background: var(--panel); padding: 14px 28px; border-radius: 8px; font-size: 16px; }
+#stage-hud .hud-card .big { font-size: 34px; font-weight: 600; }
+#stage-hud .hud-card .huge { font-size: 72px; font-weight: 700; line-height: 1; }
+#stage-hud .hud-dip { position: absolute; inset: 0; background: #fff; opacity: 0; }
