@@ -20,3 +20,33 @@ the first playable slice lands).
 
 The code is MIT licensed; see [LICENSE](LICENSE). Third-party libraries and
 fonts keep their own licences.
+
+## Development
+
+Needs Node 24+.
+
+```sh
+npm ci
+npm run dev        # http://localhost:5173/
+npm test           # unit tests
+npm run build      # production build into dist/, served under /backroad-rally/
+```
+
+Add `?webgl` to the URL to force the WebGL2 renderer instead of WebGPU, and
+`?car=<id>` to pick a car. Keys: W/S throttle and brake, A/D steer, C camera,
+L livery.
+
+### Asset conversion
+
+The game's data, meshes and audio come from an earlier engine version of the
+game, kept outside this repository. Its location is passed to the converters
+with `--ue <path>` or `BR_UE_ROOT`. The converted output is committed, so
+building the site needs none of this.
+
+| Script | Output |
+|---|---|
+| `node tools/convert/data.mjs` | `public/data/`: game data as JSON (engine units; `src/ue.ts` converts at load) |
+| `blender -b -P tools/blender/export_car_glb.py -- --car swift` | `public/assets/cars/<id>.glb` (Blender 5.2) |
+
+`node tools/check/shot.mjs` drives a production build in headless Chrome and
+saves screenshots. Serve `dist/` under `/backroad-rally/` first.
