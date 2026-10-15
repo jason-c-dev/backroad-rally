@@ -6,6 +6,7 @@ import { createWorld, initPhysics, PHYSICS_DT } from '../../src/sim/physics';
 import { buildTestTrackPhysics } from '../../src/sim/testTrackPhysics';
 import { loadCarTuning } from '../../src/sim/tuning';
 import { Vehicle, noInput } from '../../src/sim/vehicle';
+import { createArcade } from '../../src/sim/arcade';
 
 const d = (f: string) => JSON.parse(readFileSync(`public/data/${f}`, 'utf8'));
 const [car = 'swift', thr = '1', st = '0', secs = '8'] = process.argv.slice(2);
@@ -14,6 +15,7 @@ const world = createWorld(rapier);
 const surf = buildTestTrackPhysics(rapier, world, d('testtrack.json'));
 const cj = d(`cars/${car}.json`);
 const v = new Vehicle(rapier, world, loadCarTuning(d('cars_tuning.json'), cj, car), surf, cj.wheel_pos_cm);
+if (!process.argv.includes('--no-arcade')) v.arcade = createArcade(v);
 v.teleport(new Vector3(15, 0.4, -300), 0);
 let t = 0;
 for (let i = 0; i < Number(secs) * 120; i++) {

@@ -14,7 +14,8 @@ import type RAPIER from '@dimforge/rapier3d-compat';
 import { createWorld, initPhysics, PHYSICS_DT } from '../../src/sim/physics';
 import { buildTestTrackPhysics } from '../../src/sim/testTrackPhysics';
 import { loadCarTuning } from '../../src/sim/tuning';
-import { Vehicle, noInput, type DriverInput } from '../../src/sim/vehicle';
+import { TYRE, Vehicle, noInput, type DriverInput } from '../../src/sim/vehicle';
+import { createArcade } from '../../src/sim/arcade';
 import type { TestTrack } from '../../src/data';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -30,6 +31,8 @@ const tuningJson = data('cars_tuning.json');
 const ALL_CARS = ['swift', 'pip', 'lama', 'quint', 'kaze'];
 const DROP_M = 0.4;
 const DT = PHYSICS_DT;
+const noArcade = process.argv.includes('--no-arcade');
+const trace = process.argv.includes('--trace');
 
 // ---------------------------------------------------------------- helpers (UE math)
 const DEG = Math.PI / 180;
@@ -124,7 +127,7 @@ class Run {
   // accumulators (UE member names)
   T100 = -1; T150 = -1; VMax = 0; HeldKmh = 0; HeldTimer = 0; FailTimer = 0; MaxSlip = 0; PeakYawRate = 0;
   YawTravel = 0; PeakSlipSigned = 0; CalmTimer = 0; BalanceSum = 0; BalanceN = 0; RecoverT = -1;
-  PrevYaw = 0; Spun = false; TargetKmh = 25; history: [number, number][] = []; prevVel: Vector3 | null = null;
+  traceT = 0; PrevYaw = 0; Spun = false; TargetKmh = 25; history: [number, number][] = []; prevVel: Vector3 | null = null;
   EntryKmh = 0; BrakeStart: V2 = { x: 0, y: 0 }; BrakeEntryKmh = 0;
   // hairpin
   Hp: Json = {}; HpRadiusM = 13; HpHalfWidthM = 4; HpArcStart: V2 = { x: 0, y: 0 };
@@ -159,6 +162,7 @@ class Run {
     this.world = createWorld(this.rapier);
     const surf = buildTestTrackPhysics(this.rapier, this.world, track);
     this.car = new Vehicle(this.rapier, this.world, tuning, surf, carJson.wheel_pos_cm);
+    if (!noArcade) this.car.arcade = createArcade(this.car);
     const pad = `pad_${j.surface}`;
     let pose: Pose;
     if (j.kind === 'accel' || j.kind === 'brake') {
@@ -244,6 +248,14 @@ class Run {
         : this.tickManoeuvre();
     }
     if (this.done) return;
+    if (trace && this.phase > 0 && (this.traceT += DT) >= 0.1 - 1e-9) {
+      this.traceT = 0;
+      const a = c.arcade as { dbgStabYaw?: number; dbgCountersteer?: number } | null;
+      console.log(`  ph${this.phase} t=${this.t.toFixed(2)} kmh=${this.kmh.toFixed(1)} g${c.gear} rpm=${c.rpm.toFixed(0)} in=${input.throttle.toFixed(2)}/${input.brake.toFixed(2)}/${input.steer.toFixed(2)}${input.handbrake ? '/hb' : ''} ` +
+        `sm=${c.smoothedSteer.toFixed(2)} app=${c.appliedSteer.toFixed(2)} slip=${c.bodySlipDeg.toFixed(1)} yaw=${c.yawRateDeg.toFixed(1)} pw=${c.powerSlide.toFixed(2)} str=${c.powerStrength.toFixed(2)} ` +
+        `rspin=${c.rearSpinCms.toFixed(0)} fspin=${c.frontSpinCms.toFixed(0)} tc=${c.tcScale.toFixed(2)} stab=${(a?.dbgStabYaw ?? 0).toFixed(0)} cs=${(a?.dbgCountersteer ?? 0).toFixed(2)} ` +
+        `wheels=${c.wheels.map((w) => `${w.slipAngleDeg.toFixed(0)}/${w.longSlipCms.toFixed(0)}`).join(' ')}`);
+    }
     c.input = input;
     c.step(DT);
     this.world.step();
@@ -803,6 +815,12 @@ function kindName(j: Job): string {
 
 // ---------------------------------------------------------------- main
 async function main() {
+  // --tyre key=value[,key=value]: override the tyre constants for a tuning sweep
+  for (const kv of (arg('--tyre', '') ?? '').split(',').filter(Boolean)) {
+    const [k, v] = kv.split('=');
+    if (!(k in TYRE)) throw new Error(`unknown tyre constant ${k}`);
+    (TYRE as Record<string, number>)[k] = Number(v);
+  }
   const cars = (arg('--cars', 'all')!).split(',').flatMap((c) => (c === 'all' ? ALL_CARS : [c]));
   const kindsArg = arg('--kinds', 'all')!;
   const kinds = kindsArg === 'all'
@@ -815,7 +833,7 @@ async function main() {
   const uePath = arg('--ue');
   const ue = new Map<string, string>();
   if (uePath && existsSync(uePath)) {
-    for (const line of readFileSync(uePath, 'utf8').split('\n')) {
+    for (const line of readFileSync(uePath, 'utf8').split(/\r?\n/)) {
       const m = line.match(/^(\S+) (\S+) (\S+) (.*)$/);
       if (m) ue.set(`${m[1]} ${m[2]} ${m[3]}`, m[4]);
     }

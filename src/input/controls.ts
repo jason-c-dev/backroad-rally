@@ -13,7 +13,7 @@ import type { DriverInput } from '../sim/vehicle';
 const DEADZONE = 0.08;
 const PAD = { a: 0, b: 1, x: 2, y: 3, l1: 4, r1: 5, l2: 6, r2: 7, back: 8, start: 9 };
 
-export type Action = 'camera' | 'recover' | 'pause' | 'livery';
+export type Action = 'camera' | 'recover' | 'pause' | 'livery' | 'assist';
 
 export class Controls {
   private down = new Set<string>();
@@ -94,4 +94,5 @@ const KEY_ACTIONS: Record<string, Action> = {
   KeyR: 'recover',
   Escape: 'pause',
   KeyL: 'livery',
+  KeyT: 'assist',
 };

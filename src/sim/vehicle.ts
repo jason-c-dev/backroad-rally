@@ -67,20 +67,38 @@ export interface ArcadeLayer {
 const G = 9.81;
 const DEG = Math.PI / 180;
 const AIR_DENSITY = 1.225;
-// Grip: UE's effective grip came from Chaos' tyre model; this scale makes surface friction x axle
-// friction land on the measured UE numbers (tarmac ~1.1 g, gravel ~0.95 g).
-const GRIP_SCALE = 0.82;
-// Tyre model (tuned against testtrack.json bands, slice 2)
-const SLIP_ANGLE_PEAK_DEG = 7; // at cornering_stiffness 400; scales inversely
-const SLIP_RATIO_PEAK = 0.12;
-const SLIP_REF_SPEED = 3; // m/s: slip ratio denominator floor (standstill)
-const SLIP_ANGLE_REF_SPEED = 1.5;
-const ROLLING_RESISTANCE = 0.012; // share of the load
-// Suspension: natural frequency per corner; Chaos' spring rates don't map 1:1 (handoff §5.1)
-const SUSPENSION_HZ = 1.8;
-const BUMP_STOP_RATE = 8; // x the spring rate past full compression
-const WHEEL_INERTIA = 0.8; // kg m^2 per wheel (tyre + rim + hub + brake)
-const ENGINE_INERTIA = 0.05; // kg m^2, reflected through the gearing to the driven wheels
+/**
+ * Tyre and chassis constants, tuned against the testtrack.json bands (tools/test/handling.ts can
+ * override them: --tyre key=value). UE's grip came from Chaos' tyre model; gripScale makes surface
+ * friction x axle friction land on the measured UE numbers (tarmac ~1.1 g, gravel ~0.95 g).
+ */
+export const TYRE = {
+  gripScale: 0.82,
+  /** Longitudinal peak over the lateral one (traction and braking at the peak; a locked wheel slides at 1). */
+  longPeak: 1,
+  /**
+   * Slip angle at the peak (deg), times (400 / cornering_stiffness)^corneringExponent. Chaos'
+   * cornering stiffness doesn't carry over: any exponent above 0 made the low-stiffness AWD rears
+   * oversteer at speed and planted the lama, the opposite of the UE cars. Passing range 5.0-6.0.
+   */
+  slipAnglePeakDeg: 5.5,
+  corneringExponent: 0,
+  /** Slip ratio at the peak. */
+  slipRatioPeak: 0.12,
+  /** Normalised slip past the peak over which the force falls to its sliding value. */
+  slideFalloff: 2,
+  slipRefSpeed: 3, // m/s: slip-ratio denominator floor (standstill)
+  slipAngleRefSpeed: 1.5,
+  rollingResistance: 0.012, // share of the load
+  suspensionHz: 1.8, // natural frequency per corner; Chaos' spring rates don't map 1:1 (handoff §5.1)
+  bumpStopRate: 8, // x the spring rate past full compression
+  wheelInertia: 0.8, // kg m^2 per wheel (tyre + rim + hub + brake)
+  engineInertia: 0.05, // kg m^2, reflected through the gearing to the driven wheels
+  /** Chaos wheel traction control: drive torque cap over what the tyre passes on. */
+  wheelTcMargin: 0.3,
+  /** Slip ratio where the wheel traction control starts to take the margin back. */
+  wheelTcSlip: 0.1,
+};
 const COM_BASE_HEIGHT = 0.62; // m above the ground: UE com_offset_cm z is relative to this
 const BODY_CLEARANCE = 0.22; // chassis collider bottom above the ground at rest
 
@@ -192,7 +210,7 @@ export class Vehicle {
       const axle = front ? t.front : t.rear;
       const p = wheelPosCm[key];
       const corner = (t.massKg * (front ? frontShare : 1 - frontShare)) / 2;
-      const k = corner * (2 * Math.PI * SUSPENSION_HZ) ** 2;
+      const k = corner * (2 * Math.PI * TYRE.suspensionHz) ** 2;
       const driven = t.drivetrain === 'AWD' || (t.drivetrain === 'FWD') === front;
       const driveShare = !driven ? 0 : nDriven === 2 ? 0.5 : (front ? 1 - t.frontRearSplit : t.frontRearSplit) / 2;
       this.defs.push({
@@ -376,7 +394,7 @@ export class Vehicle {
       const prev = this.hadContact[i] ? this.prevCompression[i] : w.compression;
       const vel = (w.compression - prev) / dt;
       let f = d.staticLoad + d.k * w.compression + d.c * vel;
-      if (w.compression > d.raise) f += d.k * BUMP_STOP_RATE * (w.compression - d.raise);
+      if (w.compression > d.raise) f += d.k * TYRE.bumpStopRate * (w.compression - d.raise);
       const other = this.wheels[i ^ 1];
       if (other.inContact) f += d.axle.rollbar_scaling * d.k * (w.compression - other.compression);
       w.load = Math.max(0, f);
@@ -517,7 +535,7 @@ export class Vehicle {
     const w = this.wheels[i];
     const s = this.t.surfaces[w.surface];
     return SURFACE_FRICTION[w.surface] * this.defs[i].axle.friction * (s?.grip_scale ?? 1)
-      * (this.weatherGrip[w.surface] ?? 1) * GRIP_SCALE;
+      * (this.weatherGrip[w.surface] ?? 1) * TYRE.gripScale;
   }
 
   private fx = new Vector3();
@@ -534,7 +552,7 @@ export class Vehicle {
     const R = t.wheelRadius;
     const ratio = this.gearRatio();
     const crank = this.engineTorque(throttle);
-    const reflected = ENGINE_INERTIA * (ratio * t.finalDrive) ** 2;
+    const reflected = TYRE.engineInertia * (ratio * t.finalDrive) ** 2;
     const engineBraking = throttle <= 0.02 && this.gear !== 0 && this.shiftTimer === 0;
     const steerRad = this.wheelAngleDeg * DEG;
     const cs = Math.cos(steerRad), sn = Math.sin(steerRad);
@@ -542,13 +560,16 @@ export class Vehicle {
     for (let i = 0; i < 4; i++) {
       const d = this.defs[i];
       const w = this.wheels[i];
-      const inertia = WHEEL_INERTIA + (d.driven ? reflected * d.driveShare : 0);
+      const inertia = TYRE.wheelInertia + (d.driven ? reflected * d.driveShare : 0);
       // torques on the wheel
-      const driveT = d.driven ? crank * ratio * t.finalDrive * t.efficiency * d.driveShare : 0;
+      let driveT = d.driven ? crank * ratio * t.finalDrive * t.efficiency * d.driveShare : 0;
+      // the limiter per driven wheel: with open differentials one spinning wheel would otherwise
+      // run far past it while the engine reads the average
+      if (driveT !== 0 && (Math.abs(w.omega) * Math.abs(ratio) * t.finalDrive * 60) / (2 * Math.PI) >= t.maxRpm) driveT = 0;
       let brakeT = brake * d.axle.brake_torque;
       if (handbrake && !d.front) brakeT += d.axle.handbrake_torque;
       if (engineBraking && d.driven) brakeT += t.engineBrake * this.rpm;
-      if (w.inContact) brakeT += ROLLING_RESISTANCE * w.load * R;
+      if (w.inContact) brakeT += TYRE.rollingResistance * w.load * R;
 
       if (!w.inContact) {
         // free wheel: drive and brakes only
@@ -578,8 +599,19 @@ export class Vehicle {
       const fMax = mu * Math.max(0, fz);
 
       // longitudinal: semi-implicit wheel spin against a linear tyre, then the combined-slip limit
-      const vRef = Math.max(Math.abs(vLong), SLIP_REF_SPEED);
-      const cLong = fMax / (SLIP_RATIO_PEAK * vRef); // N per m/s of slip
+      const vRef = Math.max(Math.abs(vLong), TYRE.slipRefSpeed);
+      const fMaxLong = fMax * TYRE.longPeak;
+      // Chaos' per-wheel traction control (axle traction_control): the wheel gets what its tyre
+      // passes on plus a margin that shrinks as the wheel's slip ratio grows past wheelTcSlip, and
+      // turns into a deficit by twice that: wheelspin holds at a few tens of percent
+      if (d.axle.traction_control && driveT !== 0) {
+        const kappa = Math.max(0, w.longSlipCms / 100) / vRef;
+        const k0 = TYRE.wheelTcSlip;
+        const excess = TYRE.wheelTcMargin * clamp(1 - (kappa - k0) / k0, -1, 1);
+        const cap = fMaxLong * R * Math.max(0, 1 + excess);
+        if (Math.abs(driveT) > cap) driveT = Math.sign(driveT) * cap;
+      }
+      const cLong = fMaxLong / (TYRE.slipRatioPeak * vRef); // N per m/s of slip
       // fx === null: linear tyre, solved implicitly; else the saturated tyre force, held constant.
       // The brake (Coulomb) opposes the way the wheel would turn without it; if it would carry the
       // wheel through zero, it holds the wheel instead.
@@ -596,18 +628,25 @@ export class Vehicle {
       };
       let om = solve(w.omega, null);
       // combined slip
-      const alphaPeak = (SLIP_ANGLE_PEAK_DEG * 400) / Math.max(50, d.axle.cornering_stiffness);
-      const slipAngle = Math.atan2(vLat, Math.max(Math.abs(vLong), SLIP_ANGLE_REF_SPEED));
+      const alphaPeak = TYRE.slipAnglePeakDeg * (400 / Math.max(50, d.axle.cornering_stiffness)) ** TYRE.corneringExponent;
+      const slipAngle = Math.atan2(vLat, Math.max(Math.abs(vLong), TYRE.slipAngleRefSpeed));
+      // How hard the drive or the brake asks the tyre to push, relative to its longitudinal peak.
+      // Chaos clips the force the wheel *asks for* to the grip, so a spinning or locked wheel keeps
+      // a share of side grip; past the peak, the longitudinal slip that sets the force direction is
+      // capped at this demand.
+      const demand = Math.max(1, (Math.abs(driveT) + brakeT) / R / Math.max(1, fMaxLong));
       const forces = (omega: number) => {
-        const sx = (omega * R - vLong) / vRef / SLIP_RATIO_PEAK;
+        let sx = (omega * R - vLong) / vRef / TYRE.slipRatioPeak;
+        if (Math.abs(sx) > demand) sx = Math.sign(sx) * demand;
         const sy = Math.tan(slipAngle) / Math.tan(alphaPeak * DEG);
         const s = Math.hypot(sx, sy);
         if (s < 1e-6) return { fx: 0, fy: 0, s };
-        // past the peak the tyre slides: sideways it falls off to side_slip, a locked or
-        // spinning wheel keeps its full friction
-        const floor = lerp(1, d.axle.side_slip, (sy / s) ** 2);
-        const f = s <= 1 ? s : lerp(1, floor, clamp((s - 1) / 2, 0, 1));
-        return { fx: (fMax * f * sx) / s, fy: (-fMax * f * sy) / s, s };
+        // a friction ellipse (longPeak along the wheel); past the peak the tyre slides: sideways
+        // it falls off to side_slip, along the wheel to the base friction
+        const k = s <= 1 ? 0 : clamp((s - 1) / TYRE.slideFalloff, 0, 1);
+        const fLong = s <= 1 ? s : lerp(1, 1 / TYRE.longPeak, k);
+        const fLat = s <= 1 ? s : lerp(1, d.axle.side_slip, k);
+        return { fx: (fMaxLong * fLong * sx) / s, fy: (-fMax * fLat * sy) / s, s };
       };
       let F = forces(om);
       if (F.s > 1) {
@@ -684,7 +723,9 @@ export class Vehicle {
     for (let i = 2; i < 4; i++) {
       const w = this.wheels[i];
       if (w.inContact) {
-        grip += w.load * this.surfaceGrip(i) * w.arcadeGrip;
+        // UE: spring force x the physical material's friction x the wheel's friction multiplier
+        // (no TYRE.gripScale: the traction-control shares in cars_tuning.json are in those units)
+        grip += (w.load * this.surfaceGrip(i) * w.arcadeGrip) / TYRE.gripScale;
         n++;
       }
     }
