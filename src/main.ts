@@ -13,23 +13,37 @@ import { posM, yaw } from './ue';
 import { createWorld, initPhysics } from './sim/physics';
 import { buildTestTrackPhysics } from './sim/testTrackPhysics';
 import { loadCarTuning } from './sim/tuning';
-import { Vehicle, type SurfaceQuery } from './sim/vehicle';
+import { Vehicle, type DriverInput, type SurfaceQuery } from './sim/vehicle';
 import { Simulation } from './sim/simulation';
 import { createArcade } from './sim/arcade';
 import { DEFAULT_RULES, RoadTracker } from './sim/road';
 import { StageRun, DEFAULT_FLOW, type FlowConfig } from './game/stageRun';
+import { Autopilot, DEFAULT_AUTOPILOT } from './game/autopilot';
 
 const params = new URLSearchParams(location.search);
+/** Headless runs: ?timescale=4 runs the game (physics, flow, camera) four times faster than the clock. */
+const timeScale = Math.min(Math.max(Number(params.get('timescale') ?? 1) || 1, 0.1), 16);
+
+/** Per-frame costs for tools/check (ms): read through window.__br.perf. */
+const perf = {
+  frames: [] as { dt: number; step: number; inst: number; render: number; calls: number; tris: number; visible: number }[],
+  reset() {
+    this.frames.length = 0;
+  },
+};
 
 /** What the game loop needs from the place it drives in: the test bench or a stage. */
 interface Level {
   surfaceAt: SurfaceQuery;
   spawn(): { position: THREE.Vector3; yawDeg: number };
-  /** After the physics step: tracking, resets, the HUD. */
+  /** Once per frame after the physics: restart, instances, the HUD. */
   frame?(dt: number, camera: THREE.Vector3): void;
-  /** Driver input through the stage flow (intro, countdown, finish). */
-  filterInput?(dt: number, input: ReturnType<Controls['poll']>['input']): ReturnType<Controls['poll']>['input'];
+  /** Before every physics step: tracking, off-road resets, the stage flow (intro, countdown, finish), autopilot. */
+  step?(dt: number, input: DriverInput): DriverInput;
   info(): string;
+  /** Last updateInstances cost (ms) and the visible instance count, for the perf readout. */
+  instMs?: number;
+  visible?(): number;
 }
 
 async function main() {
@@ -42,7 +56,7 @@ async function main() {
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.0;
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap; // PCFSoft is gone from WebGPURenderer (it warns and falls back)
   await renderer.init();
   app.appendChild(renderer.domElement);
   const backend = (renderer.backend as { isWebGPUBackend?: boolean }).isWebGPUBackend ? 'webgpu' : 'webgl2';
@@ -103,6 +117,7 @@ async function main() {
   const arcade = createArcade(vehicle);
   vehicle.arcade = arcade;
   sim = new Simulation(world, vehicle);
+  sim.maxSteps = Math.ceil(8 * Math.max(1, timeScale));
   const spawn = () => {
     const p = level.spawn();
     vehicle.teleport(p.position.clone().add(new THREE.Vector3(0, 0.3, 0)), p.yawDeg);
@@ -112,6 +127,13 @@ async function main() {
   (level as { attach?: (a: typeof arcade, respawn: () => void) => void }).attach?.(arcade, spawn);
 
   const chase = new ChaseCamera(camCfg, innerWidth / innerHeight);
+  // build every pipeline now rather than mid-run (the loading curtain will cover this)
+  const stageOf = (level as { stage?: Stage }).stage;
+  if (stageOf) {
+    const t0 = performance.now();
+    stageOf.warmup(() => renderer.render(scene, chase.camera));
+    stageOf.timings.warmup = performance.now() - t0;
+  }
   const controls = new Controls();
   const hud = new FrameHud(document.body, backend);
 
@@ -122,13 +144,14 @@ async function main() {
   });
 
   // read-only handle for tools/check (headless runs)
-  (window as unknown as { __br: object }).__br = { vehicle, chase, model, sim, level };
+  (window as unknown as { __br: object }).__br = { vehicle, chase, model, sim, level, renderer, perf, backend, carId };
 
   let liveryIndex = 0;
   let last = performance.now();
   const camState = { position: sim.renderPos, forward: new THREE.Vector3(), velocity: vehicle.velocity };
   renderer.setAnimationLoop((now: number) => {
-    const dt = Math.min((now - last) / 1000, 0.1);
+    const frameDt = now - last;
+    const dt = Math.min(frameDt / 1000, 0.1) * timeScale;
     last = now;
 
     const { input, actions } = controls.poll();
@@ -136,7 +159,7 @@ async function main() {
     if (actions.has('livery')) model.setLivery(car.liveries[(liveryIndex = (liveryIndex + 1) % car.liveries.length)]);
     if (actions.has('recover') && arcade.recover(vehicle, true)) sim.snap();
     if (actions.has('assist')) vehicle.setTractionAssist(!vehicle.tractionAssist);
-    sim.advance(dt, level.filterInput ? level.filterInput(dt, input) : input);
+    sim.advance(dt, input, level.step);
     level.frame?.(dt, chase.camera.position);
 
     model.root.position.copy(sim.renderPos);
@@ -152,7 +175,12 @@ async function main() {
     hud.extra = `${car.name} · ${level.info()} · ${Math.abs(vehicle.forwardSpeedKmh).toFixed(0)} km/h · gear ${gear}` +
       ` · traction assist ${vehicle.tractionAssist ? 'on' : 'off'} · camera ${chase.presetName} · ${controls.device}` +
       `\nw s a d drive · space handbrake · r recover · t traction assist · c camera · l livery · enter restart`;
+    const r0 = performance.now();
     renderer.render(scene, chase.camera);
+    const info = renderer.info.render as unknown as { drawCalls: number; triangles: number };
+    perf.frames.push({ dt: frameDt, step: sim.lastStepMs, inst: level.instMs ?? 0, render: performance.now() - r0,
+      calls: info.drawCalls, tris: info.triangles, visible: level.visible?.() ?? 0 });
+    if (perf.frames.length > 100000) perf.frames.splice(0, 50000);
     const c = renderer.domElement;
     hud.frame(now, c.width, c.height);
   });
@@ -165,6 +193,10 @@ async function buildStageLevel(id: string, reverse: boolean, rapier: typeof RAPI
     load<StageRuntimeJson & { flow: FlowConfig }>('stage_runtime.json'),
   ]);
   const stage = await Stage.load(id, catalog, runtime, rapier, world);
+  // draw distance: ?draw=near|medium|far|max or a multiplier (default far, x2)
+  const draw = params.get('draw');
+  const named = ['near', 'medium', 'far', 'max'].indexOf(draw ?? '');
+  if (draw) stage.drawDistance = named >= 0 ? runtime.draw_distance.scale.default[named] : Number(draw) || stage.drawDistance;
   scene.add(stage.group);
   scene.fog = new THREE.Fog('#B6C7D5', 250, 1400);
   const v = stage.json.variants[reverse ? 'reverse' : 'forward'];
@@ -187,8 +219,17 @@ async function buildStageLevel(id: string, reverse: boolean, rapier: typeof RAPI
     if (e.code === 'Enter') restartKey = true;
   });
   let respawn = () => {};
+  const ap = params.has('autopilot') ? new Autopilot(stage.road, tracker, {
+    ...DEFAULT_AUTOPILOT,
+    kmh: Number(params.get('autopilot')) || DEFAULT_AUTOPILOT.kmh,
+    minTurn: Number(params.get('minturn') ?? DEFAULT_AUTOPILOT.minTurn),
+    keys: (Number(params.get('apkeys') ?? 0) as 0 | 1 | 2),
+  }) : null;
 
-  const level: Level & { attach(a: ReturnType<typeof createArcade>, respawn: () => void): void } = {
+  const level: Level & { attach(a: ReturnType<typeof createArcade>, respawn: () => void): void; readonly run: StageRun } = {
+    get run() {
+      return run;
+    },
     surfaceAt: stage.surfaceAt,
     spawn: () => tracker.startPose(),
     attach(arcade, rs) {
@@ -199,20 +240,8 @@ async function buildStageLevel(id: string, reverse: boolean, rapier: typeof RAPI
         if (run.phase === 'running') run.penalty();
       };
     },
-    filterInput(dt, input) {
+    step(dt, input) {
       const veh = getVehicle();
-      const p = veh.position;
-      const outside = !!bounds && (p.x < bounds[0][0] - 50 || p.x > bounds[1][0] + 50 || p.z < bounds[0][2] - 50 || p.z > bounds[1][2] + 50);
-      return run.update(dt, input, outside);
-    },
-    frame(dt, camera) {
-      const veh = getVehicle();
-      if (restartKey) {
-        restartKey = false;
-        tracker.reset();
-        run = new StageRun(tracker, flow, true);
-        respawn();
-      }
       if (tracker.update(veh.position, dt) === 'offroad' && run.phase !== 'results') {
         // off the road for the grace time: back on the road, stopped, +5 s, white dip
         const pose = tracker.resetPose(veh.position);
@@ -220,7 +249,26 @@ async function buildStageLevel(id: string, reverse: boolean, rapier: typeof RAPI
         getSim().snap();
         if (run.phase === 'running') run.penalty();
       }
+      const p = veh.position;
+      const outside = !!bounds && (p.x < bounds[0][0] - 50 || p.x > bounds[1][0] + 50 || p.z < bounds[0][2] - 50 || p.z > bounds[1][2] + 50);
+      if (ap) {
+        // the robot never jump-starts: the flow owns the input outside the running phase
+        if (run.phase === 'running') ap.observe(veh);
+        input = run.phase === 'running' ? ap.drive(veh, dt, veh.t.steering.analog_exponent) : { ...input, throttle: 0, brake: 0, steer: 0 };
+      }
+      return run.update(dt, input, outside);
+    },
+    frame(_dt, camera) {
+      const veh = getVehicle();
+      if (restartKey) {
+        restartKey = false;
+        tracker.reset();
+        run = new StageRun(tracker, flow, true);
+        respawn();
+      }
+      const t0 = performance.now();
       stage.updateInstances(camera);
+      level.instMs = performance.now() - t0;
       hud.update(run, {
         stageName: stage.json.name,
         direction: `${stage.json.location} · ${reverse ? 'reverse' : 'forward'}`,
@@ -229,8 +277,10 @@ async function buildStageLevel(id: string, reverse: boolean, rapier: typeof RAPI
         progress: tracker.progress,
       });
     },
-    info: () => `${id} s=${tracker.proj?.s.toFixed(0) ?? '-'} · ${stage.stats.visible} inst`,
+    info: () => `${id} s=${tracker.proj?.s.toFixed(0) ?? '-'} · ${stage.stats.visible} inst${ap ? ' · autopilot' : ''}`,
+    visible: () => stage.stats.visible,
   };
+  Object.assign(level, { tracker, stage, autopilot: ap });
   return level;
 }
 

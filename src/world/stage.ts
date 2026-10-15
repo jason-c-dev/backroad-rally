@@ -3,7 +3,7 @@
 // distance (never popped), colliders for the instances near the road, and the start and finish
 // gantries. Nothing is baked: tools/convert/stage.mjs and the Blender exporters make the inputs.
 import * as THREE from 'three/webgpu';
-import { attribute, float } from 'three/tsl';
+import { attribute, cos, positionLocal, sin, vec3 } from 'three/tsl';
 import type RAPIER from '@dimforge/rapier3d-compat';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
@@ -62,7 +62,6 @@ const SLOT_SURFACE: Record<string, Surface> = {
   Grass: 'grass', Gravel: 'gravel', Tarmac: 'tarmac', Line: 'tarmac', Dirt: 'dirt', Rock: 'rock',
   Water: 'water', Snow: 'snow', Flat: 'tarmac',
 };
-const SURFACE_IDS: Surface[] = ['grass', 'gravel', 'tarmac', 'dirt', 'rock', 'water', 'snow', 'none'];
 
 const slotName = (m: THREE.Material) => m.name.replace(/\.\d+$/, '');
 
@@ -77,11 +76,23 @@ function makeMaterials() {
     Rock: ground(0.9), Snow: ground(0.7), Flat: ground(0.85),
     Water: new THREE.MeshStandardNodeMaterial({ vertexColors: true, flatShading: true, roughness: 0.15, transparent: true, opacity: 0.8 }),
   };
-  // instances: the per-instance `fade` (0..1, written each update) dithers them in with hashed alpha
+  // Instances are plain meshes on an InstancedBufferGeometry with two per-instance attributes:
+  //   inst_a = (x, y, z, scale), inst_b = (rotY, fade, tint value).
+  // The shader places them; `fade` (0..1, written each update) dithers them in with hashed alpha.
+  // Not InstancedMesh: three keeps up to 1024 instance matrices in a uniform block named after the
+  // node, so every chunk compiled its own vertex program (2200 programs, 8-45 s of hitches).
+  const ia = attribute('inst_a', 'vec4');
+  const ib = attribute('inst_b', 'vec3');
+  const local = positionLocal.mul(ia.w);
+  const c = cos(ib.x), sn = sin(ib.x);
+  // rotation about +Y by rotY (three's makeRotationY), then the instance position
+  const placed = vec3(local.x.mul(c).add(local.z.mul(sn)), local.y, local.z.mul(c).sub(local.x.mul(sn))).add(ia.xyz);
   const fading = (props: ConstructorParameters<typeof THREE.MeshStandardNodeMaterial>[0]) => {
     const m = new THREE.MeshStandardNodeMaterial({ vertexColors: true, flatShading: true, metalness: 0, ...props });
+    m.positionNode = placed;
+    m.colorNode = vec3(ib.z);
     m.alphaHash = true;
-    m.opacityNode = float(attribute('fade', 'float'));
+    m.opacityNode = ib.y;
     return m;
   };
   const instances: Record<string, THREE.Material> = {
@@ -89,7 +100,13 @@ function makeMaterials() {
     Foliage: fading({ roughness: 0.9, side: THREE.DoubleSide }),
     Glow: fading({ roughness: 0.6 }),
   };
-  return { tiles, instances };
+  // single placed props (the gantries): ordinary meshes
+  const plain = (props: ConstructorParameters<typeof THREE.MeshStandardNodeMaterial>[0]) =>
+    new THREE.MeshStandardNodeMaterial({ vertexColors: true, flatShading: true, metalness: 0, ...props });
+  const props: Record<string, THREE.Material> = {
+    Flat: plain({ roughness: 0.85 }), Foliage: plain({ roughness: 0.9, side: THREE.DoubleSide }), Glow: plain({ roughness: 0.6 }),
+  };
+  return { tiles, instances, props };
 }
 
 /** COLOR_0 is RGBA (alpha = sway weight on vegetation): keep RGB as the colour, alpha as `sway`. */
@@ -113,13 +130,11 @@ interface InstanceGroup {
   category: string;
   start: number; // fade band, m
   end: number;
-  centre: THREE.Vector2; // chunk centre (x, z)
-  radius: number; // chunk half diagonal + the mesh's radius
+  sphere: THREE.Sphere; // bounds of every instance in the chunk: per-camera culling and the range test
   ids: Uint32Array; // instance ids in the stage's instance table
-  parts: THREE.InstancedMesh[]; // one per material slot, sharing the instance attributes
-  matrices: THREE.InstancedBufferAttribute;
-  fade: THREE.InstancedBufferAttribute;
-  colors: THREE.InstancedBufferAttribute | null;
+  parts: THREE.Mesh<THREE.InstancedBufferGeometry>[]; // one per material slot, sharing the instance attributes
+  a: THREE.InstancedBufferAttribute; // x, y, z, scale
+  b: THREE.InstancedBufferAttribute; // rotY, fade, tint
 }
 
 export class Stage {
@@ -127,13 +142,16 @@ export class Stage {
   readonly road: Road;
   surfaceAt!: SurfaceQuery;
   private groups: InstanceGroup[] = [];
-  private matrices!: Float32Array; // 16 per instance, precomputed
-  private tints!: Float32Array; // 3 per instance
-  private triSurfaces = new Map<number, Uint8Array>(); // collider handle -> surface id per triangle
+  private tints!: Float32Array; // value multiplier per instance
+  // collider handle -> surface. One trimesh per tile and surface: Rapier 0.21's ray casts report
+  // Face(0) for every trimesh hit, not the triangle index, so a per-triangle table can't be used.
+  private colliderSurface = new Map<number, Surface>();
   private envGeoms = new Map<string, { geometry: THREE.BufferGeometry; slot: string }[]>();
   /** Draw distance multiplier (setting: near / medium / far / max = 1 / 1.5 / 2 / 3). */
   drawDistance = 2;
   stats = { instances: 0, visible: 0, colliders: 0, groups: 0 };
+  /** Load and build costs (ms): fetch + decode, terrain meshes, Rapier colliders (tiles, instances), instances. */
+  timings = { fetch: 0, terrain: 0, tileColliders: 0, instances: 0, instanceColliders: 0, warmup: 0 };
 
   private constructor(readonly json: StageJson, readonly bin: Float32Array, readonly catalog: Record<string, CatalogEntry>,
     readonly runtime: StageRuntimeJson) {
@@ -144,6 +162,7 @@ export class Stage {
   static async load(id: string, catalog: Record<string, CatalogEntry>, runtime: StageRuntimeJson,
     rapier: typeof RAPIER, world: RAPIER.World): Promise<Stage> {
     const base = import.meta.env.BASE_URL;
+    const t0 = performance.now();
     const [json, bin, stageGltf, envGltf] = await Promise.all([
       fetch(`${base}data/stages/${id}.json`).then((r) => r.json() as Promise<StageJson>),
       fetch(`${base}data/stages/${id}.bin`).then((r) => r.arrayBuffer()).then((b) => new Float32Array(b)),
@@ -151,10 +170,15 @@ export class Stage {
       loader().loadAsync(assetUrl(`env/env_${id}.glb`)),
     ]);
     const stage = new Stage(json, bin, catalog, runtime);
+    const t1 = performance.now();
+    stage.timings.fetch = t1 - t0;
     const mats = makeMaterials();
     stage.buildTerrain(stageGltf.scene, mats.tiles, rapier, world);
+    const t2 = performance.now();
+    stage.timings.terrain = t2 - t1;
     stage.collectEnv(envGltf.scene);
     stage.buildInstances(mats.instances, rapier, world);
+    stage.timings.instances = performance.now() - t2;
     return stage;
   }
 
@@ -169,32 +193,32 @@ export class Stage {
       node.traverse((o) => {
         if ((o as THREE.Mesh).isMesh) parts.push(o as THREE.Mesh);
       });
-      // collider: all the node's triangles except water, with the surface of each
+      // colliders: one trimesh per surface of the node (water has none: the ford is drag, not a floor)
       if (colliding.has(node.name)) {
-        const verts: number[] = [];
-        const idx: number[] = [];
-        const surf: number[] = [];
+        const bySurface = new Map<Surface, { verts: number[]; idx: number[] }>();
         const v = new THREE.Vector3();
         for (const m of parts) {
           const slot = slotName(m.material as THREE.Material);
           if (slot === 'Water') continue;
-          const s = SURFACE_IDS.indexOf(SLOT_SURFACE[slot] ?? 'grass');
+          const surface = SLOT_SURFACE[slot] ?? 'grass';
+          let acc = bySurface.get(surface);
+          if (!acc) bySurface.set(surface, (acc = { verts: [], idx: [] }));
           const pos = m.geometry.getAttribute('position');
-          const base = verts.length / 3;
+          const base = acc.verts.length / 3;
           for (let i = 0; i < pos.count; i++) {
             v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
-            verts.push(v.x, v.y, v.z);
+            acc.verts.push(v.x, v.y, v.z);
           }
           const index = m.geometry.getIndex();
-          const tris = index ? index.count / 3 : pos.count / 3;
-          for (let t = 0; t < tris; t++) {
-            for (let k = 0; k < 3; k++) idx.push(base + (index ? index.getX(t * 3 + k) : t * 3 + k));
-            surf.push(s);
-          }
+          const n = index ? index.count : pos.count;
+          for (let k = 0; k < n; k++) acc.idx.push(base + (index ? index.getX(k) : k));
         }
-        if (idx.length) {
+        for (const [surface, { verts, idx }] of bySurface) {
+          if (!idx.length) continue;
+          const tc = performance.now();
           const col = world.createCollider(rapier.ColliderDesc.trimesh(new Float32Array(verts), new Uint32Array(idx)).setFriction(0.8));
-          this.triSurfaces.set(col.handle, Uint8Array.from(surf));
+          this.timings.tileColliders += performance.now() - tc;
+          this.colliderSurface.set(col.handle, surface);
           this.stats.colliders++;
         }
       }
@@ -206,10 +230,8 @@ export class Stage {
       }
     }
     this.group.add(...nodes);
-    this.surfaceAt = (collider, featureId) => {
-      const tri = this.triSurfaces.get(collider.handle);
-      return tri && featureId !== undefined && featureId < tri.length ? SURFACE_IDS[tri[featureId]] : 'grass';
-    };
+    // anything else the wheels touch (instance colliders, gantries) counts as grass, like UE's default
+    this.surfaceAt = (collider) => this.colliderSurface.get(collider.handle) ?? 'grass';
   }
 
   // ---------------------------------------------------------------- instances
@@ -250,19 +272,8 @@ export class Stage {
     const bin = this.bin;
     const n = bin.length / F;
     this.stats.instances = n;
-    this.matrices = new Float32Array(n * 16);
-    this.tints = new Float32Array(n * 3);
-    const m4 = new THREE.Matrix4();
-    const q = new THREE.Quaternion();
-    const up = new THREE.Vector3(0, 1, 0);
+    this.tints = new Float32Array(n).fill(1);
     const p = new THREE.Vector3();
-    const sc = new THREE.Vector3();
-    for (let i = 0; i < n; i++) {
-      q.setFromAxisAngle(up, bin[i * F + 3]);
-      const s = bin[i * F + 4];
-      m4.compose(p.set(bin[i * F], bin[i * F + 1], bin[i * F + 2]), q, sc.set(s, s, s));
-      m4.toArray(this.matrices, i * 16);
-    }
     const nearRoad = this.runtime.collision_near_road_cm / 100;
     const all = { ...this.json.bin.instances, ...this.json.bin.breakables };
     const breakables = new Set(Object.keys(this.json.bin.breakables));
@@ -276,8 +287,7 @@ export class Stage {
       // tint: a value shift per instance (the look slice adds the hue shift)
       for (let i = offset; i < offset + count; i++) {
         const t = cat.tintable ? (bin[i * F + 5] - 0.5) * 2 : 0;
-        const v = 1 + t * (cat.tint_value ?? 0);
-        this.tints.set([v, v, v], i * 3);
+        this.tints[i] = 1 + t * (cat.tint_value ?? 0);
       }
       // chunk by terrain tile
       const chunks = new Map<string, number[]>();
@@ -288,26 +298,35 @@ export class Stage {
         list.push(i);
       }
       const [start, end] = this.bandFor(cat.category);
-      const meshRadius = Math.max(...parts.map((pt) => pt.geometry.boundingSphere?.radius ?? 1));
+      // reach of the mesh from its pivot (base centre)
+      const meshRadius = Math.max(...parts.map((pt) => (pt.geometry.boundingSphere?.center.length() ?? 0) + (pt.geometry.boundingSphere?.radius ?? 1)));
       for (const [key, ids] of chunks) {
-        const [cx, cz] = key.split(',').map(Number);
+        const box = new THREE.Box3();
+        let maxScale = 0;
+        for (const i of ids) {
+          box.expandByPoint(p.set(bin[i * F], bin[i * F + 1], bin[i * F + 2]));
+          maxScale = Math.max(maxScale, bin[i * F + 4]);
+        }
+        const sphere = box.getBoundingSphere(new THREE.Sphere());
+        sphere.radius += meshRadius * maxScale;
         const cap = ids.length;
-        const matrices = new THREE.InstancedBufferAttribute(new Float32Array(cap * 16), 16);
-        matrices.setUsage(THREE.DynamicDrawUsage);
-        const fade = new THREE.InstancedBufferAttribute(new Float32Array(cap), 1);
-        fade.setUsage(THREE.DynamicDrawUsage);
-        const colors = cat.tintable ? new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3) : null;
-        colors?.setUsage(THREE.DynamicDrawUsage);
-        const meshes: THREE.InstancedMesh[] = [];
+        const a = new THREE.InstancedBufferAttribute(new Float32Array(cap * 4), 4);
+        a.setUsage(THREE.DynamicDrawUsage);
+        const b = new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3);
+        b.setUsage(THREE.DynamicDrawUsage);
+        const meshes: THREE.Mesh<THREE.InstancedBufferGeometry>[] = [];
         for (const part of parts) {
-          const g = part.geometry.clone(); // shares the vertex buffers; own instance attribute
-          g.setAttribute('fade', fade);
-          const im = new THREE.InstancedMesh(g, mats[part.slot] ?? mats.Flat, cap);
-          im.instanceMatrix = matrices;
-          if (colors) im.instanceColor = colors;
-          im.count = 0;
+          const g = new THREE.InstancedBufferGeometry();
+          g.index = part.geometry.index;
+          for (const [name, attr] of Object.entries(part.geometry.attributes)) g.setAttribute(name, attr);
+          g.setAttribute('inst_a', a);
+          g.setAttribute('inst_b', b);
+          g.instanceCount = 0;
+          // three culls the chunk per camera (main and shadow) with this sphere; the instances move
+          // inside it as they are compacted, so it is set once and never recomputed
+          g.boundingSphere = sphere;
+          const im = new THREE.Mesh(g, mats[part.slot] ?? mats.Flat);
           im.visible = false;
-          im.frustumCulled = false; // culled per chunk below
           im.castShadow = cat.shadow;
           im.receiveShadow = true;
           im.name = `${mesh}@${key}`;
@@ -315,19 +334,19 @@ export class Stage {
           this.group.add(im);
         }
         this.groups.push({
-          mesh, category: cat.category, start, end,
-          centre: new THREE.Vector2((cx + 0.5) * CHUNK, (cz + 0.5) * CHUNK),
-          radius: CHUNK * Math.SQRT1_2 + meshRadius,
-          ids: Uint32Array.from(ids), parts: meshes, matrices, fade, colors,
+          mesh, category: cat.category, start, end, sphere,
+          ids: Uint32Array.from(ids), parts: meshes, a, b,
         });
       }
       // colliders for instances near the road (breakables come apart instead, in a later slice)
       if (cat.collision !== 'none' && !breakables.has(mesh)) {
+        const tc = performance.now();
         for (let i = offset; i < offset + count; i++) {
           const x = bin[i * F], y = bin[i * F + 1], z = bin[i * F + 2];
           if (this.road.distanceTo(x, z) > nearRoad) continue;
           this.addInstanceCollider(rapier, world, cat, parts, x, y, z, bin[i * F + 3], bin[i * F + 4]);
         }
+        this.timings.instanceColliders += performance.now() - tc;
       }
     }
     this.stats.groups = this.groups.length;
@@ -370,7 +389,42 @@ export class Stage {
     }
   }
 
+  /**
+   * Draw every chunk mesh once (one instance each, unculled) so the renderer builds all its
+   * pipelines and uploads every buffer during loading, not when a chunk first comes into view
+   * (those builds were 60-380 ms hitches while driving).
+   */
+  warmup(render: () => void): void {
+    for (const g of this.groups) {
+      this.writeInstance(g, 0, g.ids[0], 1);
+      g.a.needsUpdate = g.b.needsUpdate = true;
+      for (const im of g.parts) {
+        im.geometry.instanceCount = 1;
+        im.visible = true;
+        im.frustumCulled = false;
+      }
+    }
+    render();
+    for (const g of this.groups) {
+      for (const im of g.parts) im.frustumCulled = true;
+    }
+    this.updateInstances(this.lastUpdate, true);
+  }
+
   // ---------------------------------------------------------------- per frame
+  private writeInstance(g: InstanceGroup, k: number, i: number, fade: number): void {
+    const F = this.json.bin.floats_per_instance;
+    const bin = this.bin;
+    const A = g.a.array as Float32Array, B = g.b.array as Float32Array;
+    A[k * 4] = bin[i * F];
+    A[k * 4 + 1] = bin[i * F + 1];
+    A[k * 4 + 2] = bin[i * F + 2];
+    A[k * 4 + 3] = bin[i * F + 4];
+    B[k * 3] = bin[i * F + 3];
+    B[k * 3 + 1] = fade;
+    B[k * 3 + 2] = this.tints[i];
+  }
+
   private lastUpdate = new THREE.Vector3(1e9, 0, 0);
 
   /** Compact each chunk's visible instances by distance from the camera, with the fade over the band. */
@@ -383,12 +437,9 @@ export class Stage {
     let visible = 0;
     for (const g of this.groups) {
       const start = g.start * mul, end = g.end * mul;
-      const dc = Math.hypot(g.centre.x - camera.x, g.centre.y - camera.z) - g.radius;
+      const dc = g.sphere.distanceToPoint(camera);
       let k = 0;
       if (dc < end) {
-        const mats = g.matrices.array as Float32Array;
-        const fades = g.fade.array as Float32Array;
-        const cols = g.colors?.array as Float32Array | undefined;
         const end2 = end * end;
         for (let j = 0; j < g.ids.length; j++) {
           const i = g.ids[j];
@@ -397,19 +448,20 @@ export class Stage {
           if (d2 >= end2) continue;
           const d = Math.sqrt(d2);
           const f = d <= start ? 1 : 1 - (d - start) / (end - start);
-          mats.set(this.matrices.subarray(i * 16, i * 16 + 16), k * 16);
-          fades[k] = f;
-          if (cols) cols.set(this.tints.subarray(i * 3, i * 3 + 3), k * 3);
+          this.writeInstance(g, k, i, f);
           k++;
         }
         if (k) {
-          g.matrices.needsUpdate = true;
-          g.fade.needsUpdate = true;
-          if (g.colors) g.colors.needsUpdate = true;
+          // upload only the compacted front of each buffer
+          for (const [a, size] of [[g.a, 4], [g.b, 3]] as const) {
+            a.clearUpdateRanges();
+            a.addUpdateRange(0, k * size);
+            a.needsUpdate = true;
+          }
         }
       }
       for (const im of g.parts) {
-        im.count = k;
+        im.geometry.instanceCount = k;
         im.visible = k > 0;
       }
       visible += k;
@@ -420,7 +472,7 @@ export class Stage {
   // ---------------------------------------------------------------- gantries
   /** Start and finish arches at the road (front toward the approaching car), legs on the ground. */
   addGantries(startS: number, finishS: number, sign: number, rapier: typeof RAPIER, world: RAPIER.World,
-    instanceMats: Record<string, THREE.Material> = makeMaterials().instances): void {
+    propMats: Record<string, THREE.Material> = makeMaterials().props): void {
     const g = this.runtime.gantries;
     const legOffset = g.leg_offset_cm / 100;
     const place = (mesh: string, s: number) => {
@@ -444,8 +496,7 @@ export class Stage {
       root.rotation.y = rotY;
       for (const part of parts) {
         const geom = part.geometry.clone();
-        geom.setAttribute('fade', new THREE.BufferAttribute(new Float32Array(geom.getAttribute('position').count).fill(1), 1));
-        const m = new THREE.Mesh(geom, instanceMats[part.slot] ?? instanceMats.Flat);
+        const m = new THREE.Mesh(geom, propMats[part.slot] ?? propMats.Flat);
         m.castShadow = true;
         m.receiveShadow = true;
         root.add(m);

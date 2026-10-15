@@ -84,7 +84,8 @@ export class StageRun {
         if (this.t >= f.finished_coast_s) this.enter('results');
         return { throttle: 0, brake: f.finished_coast_brake, steer: driver.steer, digitalSteer: driver.digitalSteer, handbrake: false };
       case 'results':
-        return { throttle: 0, brake: 1, steer: 0, digitalSteer: false, handbrake: true };
+        // the handbrake holds it: brake held at a standstill would select reverse
+        return { throttle: 0, brake: 0, steer: 0, digitalSteer: false, handbrake: true };
     }
   }
 
