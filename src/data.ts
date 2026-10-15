@@ -42,6 +42,7 @@ export interface CarData {
   width_cm: number;
   wheelbase_cm: number;
   wheel_radius_cm: number;
+  wheel_pos_cm: Record<'fl' | 'fr' | 'rl' | 'rr', [number, number, number]>;
   liveries: Livery[];
 }
 

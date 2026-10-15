@@ -29,12 +29,24 @@ Needs Node 24+.
 npm ci
 npm run dev        # http://localhost:5173/
 npm test           # unit tests
+npm run test:handling   # headless handling tests (all cars, both surfaces)
 npm run build      # production build into dist/, served under /backroad-rally/
 ```
 
 Add `?webgl` to the URL to force the WebGL2 renderer instead of WebGPU, and
-`?car=<id>` to pick a car. Keys: W/S throttle and brake, A/D steer, C camera,
-L livery.
+`?car=<id>` to pick a car (swift, pip, lama, quint, kaze). Keys: W/S throttle
+and brake, A/D steer, Space handbrake, R reset, C camera, L livery. A gamepad
+works too: triggers, left stick, L1 handbrake, Y reset, X camera.
+
+### Handling tests
+
+`npm run test:handling` drives every car through the scripted manoeuvres in
+`public/data/testtrack.json` (acceleration, the R40 circle, braking, coasting,
+key taps, flicks, handbrake turns, hairpins, power slides, high-speed taps and
+lane changes) and checks each against its pass band. Options: `--cars swift,pip`,
+`--kinds corner,brake`, `--surfaces gravel`, `--quiet` (failures only).
+`npx tsx tools/test/probe.ts <car> <throttle> <steer> <seconds>` prints the
+car's state over a fixed input.
 
 ### Asset conversion
 
