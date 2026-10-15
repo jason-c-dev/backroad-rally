@@ -1,0 +1,5 @@
+node_modules/
+dist/
+# private planning notes (own local git repo; never published)
+private/
+.env
