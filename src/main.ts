@@ -3,11 +3,15 @@ import * as THREE from 'three/webgpu';
 import { load, loadCar, type CameraData, type TestTrack } from './data';
 import { buildTestStrip } from './world/testStrip';
 import { loadCarModel } from './car/carModel';
-import { PlaceholderDrive } from './car/placeholderDrive';
 import { ChaseCamera } from './camera/chaseCamera';
-import { Keyboard } from './input/keyboard';
+import { Controls } from './input/controls';
 import { FrameHud } from './hud/frameHud';
-import { cm, kmh, posM, yaw } from './ue';
+import { posM, yaw } from './ue';
+import { createWorld, initPhysics } from './sim/physics';
+import { buildTestTrackPhysics } from './sim/testTrackPhysics';
+import { loadCarTuning } from './sim/tuning';
+import { Vehicle } from './sim/vehicle';
+import { Simulation } from './sim/simulation';
 
 const params = new URLSearchParams(location.search);
 
@@ -26,10 +30,13 @@ async function main() {
   app.appendChild(renderer.domElement);
   const backend = (renderer.backend as { isWebGPUBackend?: boolean }).isWebGPUBackend ? 'webgpu' : 'webgl2';
 
-  const [track, camCfg, car] = await Promise.all([
+  const carId = params.get('car') ?? 'swift';
+  const [track, camCfg, car, tuningJson, rapier] = await Promise.all([
     load<TestTrack>('testtrack.json'),
     load<CameraData>('camera.json'),
-    loadCar(params.get('car') ?? 'swift'),
+    loadCar(carId),
+    load<Record<string, unknown>>('cars_tuning.json'),
+    initPhysics(),
   ]);
 
   const scene = new THREE.Scene();
@@ -57,14 +64,21 @@ async function main() {
   const model = await loadCarModel(car);
   scene.add(model.root);
 
+  // physics: the test bench's ground and the car
+  const world = createWorld(rapier);
+  const surfaceAt = buildTestTrackPhysics(rapier, world, track);
+  const tuning = loadCarTuning(tuningJson, car as unknown as Record<string, unknown>, carId);
+  const vehicle = new Vehicle(rapier, world, tuning, surfaceAt, car.wheel_pos_cm);
   const strip = track.strips[0];
-  const drive = new PlaceholderDrive(cm(car.wheelbase_cm));
-  posM([strip.start[0] + 30, strip.start[1], 0], drive.position);
-  drive.heading = yaw(strip.yaw);
-  drive.update(0, 0, 0, 0);
+  const spawn = () => {
+    vehicle.teleport(posM([strip.start[0] + 15, strip.start[1], 0.4]), strip.yaw);
+    sim.snap();
+  };
+  const sim = new Simulation(world, vehicle);
+  spawn();
 
   const chase = new ChaseCamera(camCfg, innerWidth / innerHeight);
-  const keys = new Keyboard();
+  const controls = new Controls();
   const hud = new FrameHud(document.body, backend);
 
   addEventListener('resize', () => {
@@ -74,30 +88,33 @@ async function main() {
   });
 
   // read-only handle for tools/check (headless runs)
-  (window as unknown as { __br: object }).__br = { drive, chase, model };
+  (window as unknown as { __br: object }).__br = { vehicle, chase, model, sim };
 
   let liveryIndex = 0;
   let last = performance.now();
+  const camState = { position: sim.renderPos, forward: new THREE.Vector3(), velocity: vehicle.velocity };
   renderer.setAnimationLoop((now: number) => {
     const dt = Math.min((now - last) / 1000, 0.1);
     last = now;
 
-    keys.update(dt);
-    if (keys.tapped('KeyC')) chase.cycle();
-    if (keys.tapped('KeyL')) model.setLivery(car.liveries[(liveryIndex = (liveryIndex + 1) % car.liveries.length)]);
-    drive.update(dt, keys.throttle, keys.brake, keys.steer);
-    keys.endFrame();
+    const { input, actions } = controls.poll();
+    if (actions.has('camera')) chase.cycle();
+    if (actions.has('livery')) model.setLivery(car.liveries[(liveryIndex = (liveryIndex + 1) % car.liveries.length)]);
+    if (actions.has('recover')) spawn();
+    sim.advance(dt, input);
 
-    model.root.position.copy(drive.position);
-    model.root.rotation.y = drive.heading;
-    model.pose(drive.steerAngle, (drive.speed * dt) / model.wheelRadius);
+    model.root.position.copy(sim.renderPos);
+    model.root.quaternion.copy(sim.renderRot);
+    model.pose((vehicle.wheelAngleDeg * Math.PI) / 180, vehicle.wheels);
 
-    chase.update(dt, drive);
-    sun.target.position.copy(drive.position);
-    sun.position.copy(drive.position).addScaledVector(sunDir, -150);
+    camState.forward.set(1, 0, 0).applyQuaternion(sim.renderRot);
+    chase.update(dt, camState);
+    sun.target.position.copy(sim.renderPos);
+    sun.position.copy(sim.renderPos).addScaledVector(sunDir, -150);
 
-    hud.extra = `${car.name} · ${kmh(Math.abs(drive.speed)).toFixed(0)} km/h · camera ${chase.presetName}` +
-      ` · w s a d drive · c camera · l livery`;
+    const gear = vehicle.gear < 0 ? 'r' : String(vehicle.gear);
+    hud.extra = `${car.name} · ${Math.abs(vehicle.forwardSpeedKmh).toFixed(0)} km/h · gear ${gear} · ${vehicle.rpm.toFixed(0)} rpm` +
+      ` · camera ${chase.presetName} · ${controls.device}\nw s a d drive · space handbrake · r reset · c camera · l livery`;
     renderer.render(scene, chase.camera);
     const c = renderer.domElement;
     hud.frame(now, c.width, c.height);

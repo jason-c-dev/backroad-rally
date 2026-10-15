@@ -15,8 +15,8 @@ export interface CarModel {
   wheels: Record<WheelKey, THREE.Object3D>;
   wheelRadius: number;
   setLivery(l: Livery): void;
-  /** Front-wheel steer angle (rad, + = right) and wheel spin increment (rad). */
-  pose(steer: number, spin: number): void;
+  /** Front-wheel angle (rad, + = right) and each wheel's spin angle (rad) and suspension compression (m). */
+  pose(steer: number, wheels: { angle: number; compression: number }[]): void;
 }
 
 function slotMaterial(slot: string): THREE.MeshStandardMaterial {
@@ -67,6 +67,7 @@ export async function loadCarModel(car: CarData): Promise<CarModel> {
     const w = gltf.scene.getObjectByName(`wheel_${k}`);
     if (!w) throw new Error(`${car.id}.glb: no wheel_${k}`);
     w.rotation.order = 'YZX'; // steer about Y after spinning about the axle (Z)
+    w.userData.restY = w.position.y;
     wheels[k] = w;
   }
 
@@ -81,12 +82,13 @@ export async function loadCarModel(car: CarData): Promise<CarModel> {
       tint('Paint3', l.paint3);
       tint('Rim', l.rim);
     },
-    pose(steer, spin) {
-      for (const k of WHEELS) {
+    pose(steer, state) {
+      WHEELS.forEach((k, i) => {
         const w = wheels[k];
-        w.rotation.z -= spin; // rolling forward (+X) turns the wheel about -Z
+        w.rotation.z = -state[i].angle; // rolling forward (+X) turns the wheel about -Z
         w.rotation.y = k[0] === 'f' ? -steer : 0;
-      }
+        w.position.y = w.userData.restY + state[i].compression;
+      });
     },
   };
   model.setLivery(car.liveries[0]);

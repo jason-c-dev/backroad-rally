@@ -44,9 +44,9 @@ const tag = `${w}x${h}`;
 const hud = async () => {
   console.log('HUD', (await page.textContent('#frame-hud')).replace('\n', ' | '));
   const st = await page.evaluate(() => {
-    const { drive: d, chase: c } = window.__br;
-    const f = (v) => [v.x, v.y, v.z].map((n) => n.toFixed(1)).join(',');
-    return `car (${f(d.position)}) heading ${((d.heading * 180) / Math.PI).toFixed(0)} deg, camera (${f(c.camera.position)})`;
+    const { vehicle: v, chase: c } = window.__br;
+    const f = (p) => [p.x, p.y, p.z].map((n) => n.toFixed(1)).join(',');
+    return `car (${f(v.position)}) yaw ${v.yawDeg.toFixed(0)} deg ${v.forwardSpeedKmh.toFixed(0)} km/h gear ${v.gear}, camera (${f(c.camera.position)})`;
   });
   console.log('STATE', st);
 };
