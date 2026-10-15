@@ -3,9 +3,13 @@
 //
 //   node tools/check/shot.mjs [--url http://localhost:4173/backroad-rally/] [--out shots]
 //                             [--size 1920x800] [--webgl] [--chrome /path/to/chrome]
+//                             [--params "stage=test&car=pip"] [--at s[,lateral[,yaw]]] [--still]
+//                             [--camera n] [--tag name]
 //
 // Takes a shot at rest, then after driving (W held, then W+D), then after C (camera).
 // Prints the frame-time HUD and any console errors.
+// --at puts the car on the stage road at progress s (m), `lateral` m to the right, turned `yaw`
+// degrees from the road; --still takes only the rest shot (with --camera n: press C n times first).
 import { chromium } from 'playwright-core';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -15,7 +19,12 @@ const arg = (k, d) => {
   return i > 0 ? process.argv[i + 1] : d;
 };
 let url = arg('--url', 'http://localhost:4173/backroad-rally/');
+const extra = arg('--params', '');
+if (extra) url += (url.includes('?') ? '&' : '?') + extra;
 if (process.argv.includes('--webgl')) url += (url.includes('?') ? '&' : '?') + 'webgl';
+const at = arg('--at', '');
+const still = process.argv.includes('--still');
+const cameraPresses = Number(arg('--camera', '0'));
 const out = arg('--out', 'shots');
 const [w, h] = arg('--size', '1920x800').split('x').map(Number);
 const executablePath = arg('--chrome', process.env.CHROME_PATH ?? '/usr/bin/google-chrome-stable');
@@ -40,7 +49,25 @@ try {
   process.exit(1);
 }
 await page.waitForTimeout(1500);
-const tag = `${w}x${h}`;
+const tag = arg('--tag', `${w}x${h}`);
+if (at) {
+  const [s, lat = 0, turn = 0] = at.split(',').map(Number);
+  await page.evaluate(([s, lat, turn]) => {
+    const { vehicle, sim, level, chase } = window.__br;
+    const pose = level.tracker.road.pose(s, level.tracker.sign, lat);
+    pose.position.y += 0.3;
+    vehicle.teleport(pose.position, pose.yawDeg + turn);
+    sim.snap();
+    level.tracker.reset();
+    chase.snapped = false;
+  }, [s, lat, turn]);
+  await page.waitForTimeout(1500);
+}
+for (let i = 0; i < cameraPresses; i++) {
+  await page.keyboard.press('KeyC');
+  await page.waitForTimeout(300);
+}
+if (cameraPresses) await page.waitForTimeout(1200);
 const hud = async () => {
   console.log('HUD', (await page.textContent('#frame-hud')).replace('\n', ' | '));
   const st = await page.evaluate(() => {
@@ -52,6 +79,11 @@ const hud = async () => {
 };
 await hud();
 await page.screenshot({ path: join(out, `${tag}-1-rest.png`) });
+if (still) {
+  console.log(errors.length ? `ERRORS\n${errors.join('\n')}` : 'no console errors');
+  await browser.close();
+  process.exit(0);
+}
 
 await page.keyboard.down('KeyW');
 await page.waitForTimeout(4000);

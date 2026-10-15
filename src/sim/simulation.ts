@@ -15,6 +15,10 @@ export class Simulation {
   readonly renderPos = new Vector3();
   readonly renderRot = new Quaternion();
   steps = 0;
+  /** Past this many steps per frame the game slows down instead of spiralling (headless runs raise it). */
+  maxSteps = MAX_STEPS_PER_FRAME;
+  /** Wall time of the last frame's physics steps (ms), for the perf readout. */
+  lastStepMs = 0;
 
   constructor(readonly world: RAPIER.World, readonly vehicle: Vehicle) {
     this.snap();
@@ -30,19 +34,25 @@ export class Simulation {
     this.acc = 0;
   }
 
-  advance(frameDt: number, input: DriverInput): void {
-    this.acc = Math.min(this.acc + frameDt, PHYSICS_DT * MAX_STEPS_PER_FRAME);
+  /**
+   * Run the fixed steps due this frame. `perStep`, when given, is called before every step with the
+   * step's dt and returns the input for it (the stage flow, tracking and the autopilot live there).
+   */
+  advance(frameDt: number, input: DriverInput, perStep?: (dt: number, input: DriverInput) => DriverInput): void {
+    this.acc = Math.min(this.acc + frameDt, PHYSICS_DT * this.maxSteps);
     const v = this.vehicle;
+    const t0 = performance.now();
     while (this.acc >= PHYSICS_DT) {
       this.prevPos.copy(v.position);
       this.prevRot.copy(v.quaternion);
-      v.input = input;
+      v.input = perStep ? perStep(PHYSICS_DT, input) : input;
       v.step(PHYSICS_DT);
       this.world.step();
       v.readBody();
-      this.acc -= PHYSICS_DT;
+      this.acc = Math.max(0, this.acc - PHYSICS_DT); // a teleport in perStep snaps acc to 0
       this.steps++;
     }
+    this.lastStepMs = performance.now() - t0;
     const alpha = this.acc / PHYSICS_DT;
     this.renderPos.lerpVectors(this.prevPos, v.position, alpha);
     this.renderRot.slerpQuaternions(this.prevRot, v.quaternion, alpha);
