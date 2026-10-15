@@ -11,6 +11,7 @@ export interface AxleTuning {
   side_slip: number;
   brake_torque: number;
   handbrake_torque: number;
+  traction_control: boolean;
   susp_max_raise_cm: number;
   susp_max_drop_cm: number;
   spring_rate: number;

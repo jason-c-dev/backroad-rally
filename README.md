@@ -35,8 +35,9 @@ npm run build      # production build into dist/, served under /backroad-rally/
 
 Add `?webgl` to the URL to force the WebGL2 renderer instead of WebGPU, and
 `?car=<id>` to pick a car (swift, pip, lama, quint, kaze). Keys: W/S throttle
-and brake, A/D steer, Space handbrake, R reset, C camera, L livery. A gamepad
-works too: triggers, left stick, L1 handbrake, Y reset, X camera.
+and brake, A/D steer, Space handbrake, R recover, T traction assist, C camera,
+L livery. A gamepad
+works too: triggers, left stick, L1 handbrake, Y recover, X camera.
 
 ### Handling tests
 

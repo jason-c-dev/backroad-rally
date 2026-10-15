@@ -12,6 +12,7 @@ import { buildTestTrackPhysics } from './sim/testTrackPhysics';
 import { loadCarTuning } from './sim/tuning';
 import { Vehicle } from './sim/vehicle';
 import { Simulation } from './sim/simulation';
+import { createArcade } from './sim/arcade';
 
 const params = new URLSearchParams(location.search);
 
@@ -69,6 +70,8 @@ async function main() {
   const surfaceAt = buildTestTrackPhysics(rapier, world, track);
   const tuning = loadCarTuning(tuningJson, car as unknown as Record<string, unknown>, carId);
   const vehicle = new Vehicle(rapier, world, tuning, surfaceAt, car.wheel_pos_cm);
+  const arcade = createArcade(vehicle);
+  vehicle.arcade = arcade;
   const strip = track.strips[0];
   const spawn = () => {
     vehicle.teleport(posM([strip.start[0] + 15, strip.start[1], 0.4]), strip.yaw);
@@ -100,7 +103,8 @@ async function main() {
     const { input, actions } = controls.poll();
     if (actions.has('camera')) chase.cycle();
     if (actions.has('livery')) model.setLivery(car.liveries[(liveryIndex = (liveryIndex + 1) % car.liveries.length)]);
-    if (actions.has('recover')) spawn();
+    if (actions.has('recover') && arcade.recover(vehicle, true)) sim.snap();
+    if (actions.has('assist')) vehicle.setTractionAssist(!vehicle.tractionAssist);
     sim.advance(dt, input);
 
     model.root.position.copy(sim.renderPos);
@@ -114,7 +118,8 @@ async function main() {
 
     const gear = vehicle.gear < 0 ? 'r' : String(vehicle.gear);
     hud.extra = `${car.name} · ${Math.abs(vehicle.forwardSpeedKmh).toFixed(0)} km/h · gear ${gear} · ${vehicle.rpm.toFixed(0)} rpm` +
-      ` · camera ${chase.presetName} · ${controls.device}\nw s a d drive · space handbrake · r reset · c camera · l livery`;
+      ` · traction assist ${vehicle.tractionAssist ? 'on' : 'off'} · camera ${chase.presetName} · ${controls.device}` +
+      `\nw s a d drive · space handbrake · r recover · t traction assist · c camera · l livery`;
     renderer.render(scene, chase.camera);
     const c = renderer.domElement;
     hud.frame(now, c.width, c.height);
