@@ -12,6 +12,7 @@ import type { SurfaceQuery } from '../sim/vehicle';
 import type { Surface } from '../sim/tuning';
 import { instanceMaterials, propMaterials, terrainMaterials } from '../look/materials';
 import { fadeBand, mergeParts, vegetationLods } from './lod';
+import { instanceColliderDescs } from './colliders';
 
 export interface StageJson {
   id: string;
@@ -190,6 +191,8 @@ export class Stage {
     this.updateInstances(this.lastUpdate, true);
   }
   stats = { instances: 0, visible: 0, drawn: 0, colliders: 0, groups: 0 };
+  /** Instance colliders by catalog category (tools/check reads it). */
+  instanceColliders: Record<string, number> = {};
   /** Load and build costs (ms): fetch + decode, terrain meshes, Rapier colliders (tiles, instances), instances. */
   timings = { fetch: 0, terrain: 0, tileColliders: 0, instances: 0, instanceColliders: 0, warmup: 0 };
 
@@ -428,10 +431,9 @@ export class Stage {
           all: [...levels.flatMap((l) => (l.solid ? [l, l.solid] : [l])), ...shadow], reach: meshRadius,
         });
       }
-      // colliders for instances near the road (breakables come apart instead, in a later slice)
-      // Meshes that are also breakables (bushes, junipers) get no colliders at all, scenery included: that
-      // is what slice 4 shipped (the merge bug hid them), kept so the look slice leaves the sim untouched.
-      // Whether scenery bushes by the road should block the car is a handling question for later.
+      // colliders for instances near the road (colliders.ts). Meshes that are also breakables (bushes,
+      // junipers) get none, scenery included: the car drives through them, as in UE;
+      // rocks, boulders and trees are solid.
       if (cat.collision !== 'none' && !breakable && !(mesh in this.json.bin.breakables)) {
         const tc = performance.now();
         for (let i = offset; i < offset + count; i++) {
@@ -469,38 +471,10 @@ export class Stage {
 
   private addInstanceCollider(rapier: typeof RAPIER, world: RAPIER.World, cat: CatalogEntry,
     parts: { geometry: THREE.BufferGeometry }[], x: number, y: number, z: number, rotY: number, s: number): void {
-    const rot = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), rotY);
-    const at = (local: THREE.Vector3) => local.multiplyScalar(s).applyQuaternion(rot).add(new THREE.Vector3(x, y, z));
-    const add = (desc: RAPIER.ColliderDesc, centre: THREE.Vector3) => {
-      world.createCollider(desc.setTranslation(centre.x, centre.y, centre.z).setRotation(rot).setFriction(0.6));
+    for (const desc of instanceColliderDescs(rapier, cat, parts, x, y, z, rotY, s)) {
+      world.createCollider(desc);
       this.stats.colliders++;
-    };
-    if (cat.collision === 'capsule') {
-      const r = (cat.collision_radius_cm / 100) * s;
-      const h = (cat.height_cm / 100) * s;
-      add(rapier.ColliderDesc.capsule(Math.max(0.01, h / 2 - r), r), at(new THREE.Vector3(0, cat.height_cm / 200, 0)));
-    } else if (cat.collision === 'box') {
-      // UE local cm (X forward, Y right, Z up) -> three local m (x, z, y)
-      const boxes = cat.collision_boxes_cm ?? (cat.bounds_min_cm && cat.bounds_max_cm ? [{
-        center: cat.bounds_min_cm.map((v, k) => (v + cat.bounds_max_cm![k]) / 2),
-        half: cat.bounds_min_cm.map((v, k) => (cat.bounds_max_cm![k] - v) / 2),
-      }] : []);
-      for (const b of boxes) {
-        add(rapier.ColliderDesc.cuboid((b.half[0] / 100) * s, (b.half[2] / 100) * s, (b.half[1] / 100) * s),
-          at(new THREE.Vector3(b.center[0] / 100, b.center[2] / 100, b.center[1] / 100)));
-      }
-    } else if (cat.collision === 'complex') {
-      const pts: number[] = [];
-      const v = new THREE.Vector3();
-      for (const pt of parts) {
-        const pos = pt.geometry.getAttribute('position');
-        for (let i = 0; i < pos.count; i++) {
-          v.fromBufferAttribute(pos, i).multiplyScalar(s);
-          pts.push(v.x, v.y, v.z);
-        }
-      }
-      const desc = rapier.ColliderDesc.convexHull(new Float32Array(pts));
-      if (desc) add(desc, new THREE.Vector3(x, y, z));
+      this.instanceColliders[cat.category] = (this.instanceColliders[cat.category] ?? 0) + 1;
     }
   }
 

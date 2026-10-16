@@ -146,7 +146,9 @@ tuned by `public/data/fx.json`:
 - **Breakables:** the car drives through roadside bushes, which vanish in a burst of
   leaves, and knocks marker posts over, which tumble and come to rest lying down
   (`src/world/breakables.ts`; a proximity test, no colliders, like the original). A restart
-  puts them back. Trees and rocks near the road stay solid.
+  puts them back. Trees, rocks and boulders within 30 m of the road are solid: trees are
+  capsules, rocks boxes the size of the mesh and boulders their convex hull
+  (`src/world/colliders.ts`), so hitting one stops the car.
 - **Exhaust:** pops on a quick lift at high revs, on hard upshifts and on downshifts, and
   the turbo cars' anti-lag crackle; the flames are bright enough for bloom.
 - **Spectators** stand in the stage's crowd groups off the road (finland: 292). They hop
@@ -202,9 +204,18 @@ turns sound off.
 `public/data/testtrack.json` (acceleration, the R40 circle, braking, coasting,
 key taps, flicks, handbrake turns, hairpins, power slides, high-speed taps and
 lane changes) and checks each against its pass band. Options: `--cars swift,pip`,
-`--kinds corner,brake`, `--surfaces gravel`, `--quiet` (failures only).
+`--kinds corner,brake`, `--surfaces gravel`, `--quiet` (failures only),
+`--ue <file>` (prints the original's result for the same job under each line),
+`--trace` (the car's state ten times a second).
 `npx tsx tools/test/probe.ts <car> <throttle> <steer> <seconds>` prints the
 car's state over a fixed input.
+
+The pedals behave like the original's vehicle physics: throttle and brake move
+toward the key or trigger at a limited rate (full in about 0.17 s, released in
+0.1 s) and the engine gets the throttle squared, so a part-throttle slide loses
+speed. Traction control and the power-slide assist react to wheelspin only once
+the drive is more than the tyre can pass on, not to the slip a tyre always has
+while it pulls.
 
 ### Asset conversion
 
@@ -247,6 +258,10 @@ screenshot WebGPU.
   under the wheels. `--perf --size 3840x1600 --seconds 60` runs at real time
   and prints frame times, draw calls, visible instances and the cost of the
   instance update.
+- `node tools/check/rock.mjs [--webgl] [--car swift] [--kmh 40] [--meshes SM_Rock_B,SM_Boulder_A]`
+  drives into the biggest roadside rocks of each kind at 40 km/h and checks the car
+  stops against each, isn't thrown up and can reverse away; saves a screenshot at
+  each rock.
 - `node tools/check/perf.mjs [--gpu igpu|dgpu] [--sizes 1920x1080,3840x1600] [--seconds 45] [--configs "quality=auto;quality=low"]`
   drives the stage with the autopilot at real time and prints, per configuration,
   the renderer string, the tier auto chose, frame times (mean, p99, max, frames over
