@@ -111,16 +111,21 @@ export async function startAudio(o: AudioOpts): Promise<AudioHandle | null> {
   }
   (window as unknown as { __brAudio: AudioHandle }).__brAudio = handle;
 
+  const LISTENER_HEIGHT_M = 1.5;
   const right = new THREE.Vector3();
   let last = performance.now();
   const frame = (now: number) => {
     const dt = Math.min((now - last) / 1000, 0.1);
     last = now;
+    // UE overrides the listener to the car, 1.5 m up (RallyPlayerController SetAudioListenerOverride);
+    // the camera is 34-55 m back on its arm, which put every 3D sound (crowds above all) 25-35 dB down.
+    // Pan still follows the camera, so left on screen is left in the ears.
     const L = sys.listener;
     const cam = o.camera;
-    L.x = cam.position.x;
-    L.y = cam.position.y;
-    L.z = cam.position.z;
+    const p = o.vehicle.position;
+    L.x = p.x;
+    L.y = p.y + LISTENER_HEIGHT_M;
+    L.z = p.z;
     right.setFromMatrixColumn(cam.matrixWorld, 0);
     L.rx = right.x;
     L.rz = right.z;
