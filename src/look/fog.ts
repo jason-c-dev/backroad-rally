@@ -4,6 +4,8 @@
 import * as THREE from 'three/webgpu';
 import { Fn, abs, cameraPosition, dot, exp2, float, length, max, min, output, positionWorld, pow, saturate, select, uniform, vec4 } from 'three/tsl';
 
+type V3 = THREE.Node<'vec3'>;
+
 export const fogU = {
   density: uniform(0.003), // per metre
   falloff: uniform(0.008), // per metre
@@ -17,16 +19,15 @@ export const fogU = {
   toSun: uniform(new THREE.Vector3(0, 1, 0)),
 };
 
-/** Transmittance (x) and the fog colour to add (yzw), per vertex: fog changes slowly across a
- * triangle, and per pixel it cost 2.5 ms on an integrated GPU at 1080p. */
-const fogTerms = Fn(() => {
-  const ray = positionWorld.sub(cameraPosition);
+/** Transmittance (x) and the fog colour to add (yzw) for a world position seen from `cam`. */
+const fogTermsAt = Fn(([world, cam]: [V3, V3]) => {
+  const ray = world.sub(cam);
   const len = max(length(ray), 1e-3);
   const dir = ray.div(len);
   // skip the first `start` metres: the integral begins where the ray leaves that sphere
   const excl = min(fogU.start, len);
   const rayLength = len.sub(excl);
-  const startY = cameraPosition.y.add(dir.y.mul(excl));
+  const startY = cam.y.add(dir.y.mul(excl));
   const rayDy = dir.y.mul(rayLength);
   const origin = fogU.density.mul(exp2(max(fogU.falloff.mul(startY.sub(fogU.height)), -127).negate()));
   const f = max(fogU.falloff.mul(rayDy), -127);
@@ -41,7 +42,22 @@ const fogTerms = Fn(() => {
   return vec4(transmittance, fogColour);
 });
 
+/**
+ * The scene's fog (scene.fogNode), per vertex: fog changes slowly across a triangle, and per pixel in
+ * every material it cost 2.5 ms on an integrated GPU at 1080p (overdraw shades a pixel many times).
+ */
 export const heightFog = Fn(() => {
-  const f = fogTerms().toVarying('v_fog');
+  const f = fogTermsAt(positionWorld as unknown as V3, cameraPosition as unknown as V3).toVarying('v_fog');
   return vec4(output.rgb.mul(f.x).add(f.yzw), output.a);
 });
+
+/**
+ * The same fog applied once per pixel in the post chain, from the depth buffer (low quality): the
+ * per-vertex fog cost ~3 ms of vertex work on an integrated GPU (millions of vegetation vertices),
+ * and once per pixel at the render scale it is cheaper. Background pixels sit at the far plane and
+ * take the full fog colour, as before.
+ */
+export const fogPixel = (rgb: V3, world: V3, cam: V3): V3 => {
+  const f = fogTermsAt(world, cam);
+  return rgb.mul(f.x).add(f.yzw) as V3;
+};

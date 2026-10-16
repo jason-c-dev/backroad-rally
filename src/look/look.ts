@@ -5,7 +5,8 @@ import * as THREE from 'three/webgpu';
 import { CSMShadowNode } from 'three/examples/jsm/csm/CSMShadowNode.js';
 import { CONDITIONS, resolveCondition, whiteBalance, type Condition, type ConditionsJson } from './conditions';
 import { fogU, heightFog } from './fog';
-import { Post, QUALITY, postU, type DofConfig, type PostQuality } from './post';
+import { Post, postU, type DofConfig } from './post';
+import { QUALITY, type Quality } from './quality';
 import { U, TINTED } from './uniforms';
 import { interpTo } from '../camera/chaseCamera';
 
@@ -30,31 +31,40 @@ const CASCADES = [52, 85, 160];
 
 export interface LookOptions {
   stage: string;
+  /** Quality tier (quality.ts) and render scale to start with; setQuality changes them. */
   quality: string;
+  scale?: number;
+  /**
+   * How a render scale below 1 reaches the screen: 'browser' draws a smaller canvas and lets the
+   * page compositor stretch it (free); 'fsr' renders small inside the post chain and upscales with
+   * FSR 1 (sharper, but three full-resolution passes: ~3 ms at 3840×1600 on an integrated GPU).
+   */
+  upscale?: 'browser' | 'fsr';
   post: boolean;
-  shadowMap: number;
   /** The condition the look starts in (night builds with the quality's night cascades). */
   condition: string;
-  /** Sun shadow range (view depth, m). */
-  shadowFar?: number;
-  /** Overrides of the quality preset (?ao=, ?dof=, ?bloom=, ?msaa=, ?cascades= with 0 = no sun shadows). */
-  override?: Partial<PostQuality>;
+  /** Overrides of every tier (?ao=, ?dof=, ?bloom=, ?msaa=, ?cascades= with 0 = no sun shadows,
+   * ?shadowmap=, ?shadowfar=). */
+  override?: Partial<Quality>;
   dof: Omit<DofConfig, 'clear' | 'scale'> & { scale?: number };
 }
 
 export class Look {
-  readonly sun = new THREE.DirectionalLight();
+  /** The sun (rebuilt with its cascades when the quality changes). */
+  sun!: THREE.DirectionalLight;
   readonly sky = new THREE.HemisphereLight();
-  readonly post: Post;
-  readonly quality: PostQuality;
-  readonly qualityName: string;
+  post!: Post;
+  quality!: Quality;
+  qualityName = '';
+  /** Called after every quality change (the stage takes the vegetation settings from it). */
+  onQuality?: (q: Quality, name: string) => void;
   /** The uniform sets, for tools/check and tuning from the console. */
   readonly uniforms = { U, postU, fogU };
   /** Calibration against the original (exposure scale, sky scale): see setCondition. */
   readonly calib = { exposure: EXPOSURE_SCALE, sky: SKY_SCALE };
   cond!: Condition;
   private headlights: THREE.SpotLight[] = [];
-  private csm: CSMShadowNode;
+  private csm!: CSMShadowNode;
   private fogHeight: number | null = null;
   private lastFov = 0;
   private lastAspect = 0;
@@ -62,18 +72,65 @@ export class Look {
 
   constructor(private renderer: THREE.WebGPURenderer, private scene: THREE.Scene, private camera: THREE.PerspectiveCamera,
     private json: ConditionsJson, private opts: LookOptions, private car: { root: THREE.Object3D; headlightPosCm: number[][] }) {
-    this.qualityName = QUALITY[opts.quality] ? opts.quality : 'high';
-    this.quality = { ...QUALITY[this.qualityName], ...opts.override };
-    const sun = this.sun;
-    const night = !!resolveCondition(json, opts.condition, opts.stage).headlights;
-    const cascades = night && opts.override?.cascades === undefined ? Math.min(this.quality.cascades, this.quality.nightCascades) : this.quality.cascades;
+    scene.add(this.sky);
+    this.fogOff = !!new URLSearchParams(location.search).get('lookoff')?.includes('fog');
+    this.basePixelRatio = renderer.getPixelRatio();
+    this.setQuality(opts.quality, opts.scale ?? 1);
+    this.setPost(opts.post);
+  }
+
+  private fogOff = false;
+  private basePixelRatio = 1;
+  private vertexFog = heightFog();
+
+  /** Per-vertex fog in the materials unless the post chain does it per pixel (and is on). */
+  private placeFog(): void {
+    const want = this.fogOff || (this.quality.postFog && this.post.enabled) ? null : this.vertexFog;
+    if (this.scene.fogNode !== want) this.scene.fogNode = want;
+  }
+
+  /** Render scale in use (1 = native pixels). */
+  get scale(): number {
+    return this.quality.scale;
+  }
+
+  /**
+   * Switch the quality tier and render scale: rebuilds the sun's cascades and the post chain. Shaders
+   * that change (another cascade count, other post effects) compile on the next frame, a hitch of a
+   * fraction of a second, so callers do this rarely (auto quality settles in the first seconds).
+   */
+  setQuality(name: string, scale = 1): void {
+    // only the render scale changes (browser upscale): resize the canvas, nothing to rebuild or compile
+    if (this.quality && name === this.qualityName && this.opts.upscale !== 'fsr') {
+      this.quality.scale = scale;
+      this.renderer.setPixelRatio(this.basePixelRatio * scale);
+      return;
+    }
+    this.qualityName = QUALITY[name] ? name : 'high';
+    const q = (this.quality = { ...QUALITY[this.qualityName], ...this.opts.override, scale });
+    q.lod = { ...q.lod };
+    const old = this.sun;
+    if (old) {
+      this.scene.remove(old, old.target);
+      for (const n of (this.csm as unknown as { _shadowNodes?: { dispose(): void }[] })._shadowNodes ?? []) n.dispose();
+      this.csm.dispose();
+      old.dispose();
+    }
+    const sun = (this.sun = new THREE.DirectionalLight());
+    const night = !!resolveCondition(this.json, this.cond?.name ?? this.opts.condition, this.opts.stage).headlights;
+    const cascades = night && this.opts.override?.cascades === undefined ? Math.min(q.cascades, q.nightCascades) : q.cascades;
     sun.castShadow = cascades > 0;
+    // no sun shadows: no vegetation shadow casters either
+    if (!sun.castShadow && !q.headlightShadows) q.lod.shadowRange = 0;
     // fewer cascades keep the far ones (the near one is only for crisper shadows around the car)
-    const far = opts.shadowFar ?? CASCADES[CASCADES.length - 1];
+    const far = q.shadowFar;
     const splits = CASCADES.slice(CASCADES.length - Math.max(1, Math.min(cascades, 3))).map((d) => (d * far) / CASCADES[CASCADES.length - 1]);
-    sun.shadow.mapSize.set(opts.shadowMap, opts.shadowMap);
+    sun.shadow.mapSize.set(q.shadowMap, q.shadowMap);
     sun.shadow.bias = -0.0004;
     sun.shadow.normalBias = 0.04;
+    // layer 1 holds shadow-only casters (cheap vegetation proxies, stage.ts): the cascades (cloned from
+    // this shadow) see them, the main camera doesn't
+    sun.shadow.camera.layers.enable(1);
     this.csm = new CSMShadowNode(sun, {
       cascades: splits.length, maxFar: far, mode: 'custom', lightMargin: 80,
       customSplitsCallback: (_n: number, _near: number, far: number, out: number[]) => {
@@ -81,10 +138,19 @@ export class Look {
       },
     });
     sun.shadow.shadowNode = this.csm;
-    scene.add(sun, sun.target, this.sky);
-    if (!new URLSearchParams(location.search).get('lookoff')?.includes('fog')) scene.fogNode = heightFog();
-    this.post = new Post(renderer, scene, camera, this.quality);
-    this.setPost(opts.post);
+    this.scene.add(sun, sun.target);
+    this.lastFov = 0; // the new cascades need their frustums
+    const postOn = this.post?.enabled ?? true;
+    this.post?.dispose();
+    // render scale: a smaller canvas the compositor stretches, or FSR inside the chain
+    const fsr = this.opts.upscale === 'fsr';
+    const ratio = this.basePixelRatio * (fsr ? 1 : q.scale);
+    if (Math.abs(this.renderer.getPixelRatio() - ratio) > 1e-6) this.renderer.setPixelRatio(ratio);
+    this.post = new Post(this.renderer, this.scene, this.camera, { ...q, scale: fsr ? q.scale : 1, postFog: q.postFog && !this.fogOff });
+    this.post.enabled = postOn;
+    this.placeFog();
+    if (this.cond) this.setCondition(this.cond.name);
+    this.onQuality?.(q, this.qualityName);
   }
 
   get conditionNames(): readonly string[] {
@@ -93,6 +159,7 @@ export class Look {
 
   setPost(on: boolean): void {
     this.post.enabled = on;
+    this.placeFog();
     // with post the pipeline tone-maps itself; without it the renderer does ACES at the same exposure
     this.renderer.toneMapping = on ? THREE.NoToneMapping : THREE.ACESFilmicToneMapping;
   }
@@ -169,6 +236,7 @@ export class Look {
         l.shadow.mapSize.set(1024, 1024);
         l.shadow.bias = -0.0005;
         l.shadow.camera.near = 0.3;
+        l.shadow.camera.layers.enable(1); // vegetation casts through its shadow-only proxies
       }
       this.car.root.add(l, l.target);
       this.headlights.push(l);

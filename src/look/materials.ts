@@ -88,10 +88,21 @@ const sway = (p: V3): V3 => {
   return vec3(s1.mul(0.85).add(s2.mul(0.25)), 0, s2.mul(0.55).sub(s1.mul(0.2))).mul(w) as V3;
 };
 
-/** Dither: keep the pixel where the noise is below the visibility (alpha test, never blend). */
-const dithered = (vis: N) => {
+/** Dither: keep the pixel where the noise is in [lo, hi) (alpha test, never blend). */
+const dithered = (hi: N, lo?: N) => {
   const offset = float(frameId).mod(8).mul(5.588238).mul(U.ditherAnimate);
-  return interleavedGradientNoise(screenCoordinate.xy.add(offset)).lessThan(vis);
+  const n = interleavedGradientNoise(screenCoordinate.xy.add(offset));
+  return lo ? n.lessThan(hi).and(n.greaterThanEqual(lo)) : n.lessThan(hi);
+};
+
+/**
+ * The per-instance fade band (stage.ts fadeBand): 2·round(lo·1023) + hi, so a plain fade f is [0, f)
+ * and two levels of detail cross-fade by splitting the noise range between them. Decoded per vertex.
+ */
+const fadeBand = (): [N, N] => {
+  const v = instB().y;
+  const q = v.mul(0.5).floor();
+  return [v.sub(q.mul(2)).toVarying('v_fadeHi') as unknown as N, q.div(1023).toVarying('v_fadeLo') as unknown as N];
 };
 
 /**
@@ -112,6 +123,21 @@ export const occluder = (radius: number, strength: N | number, nearScale = 1.6, 
 
 // ---------------------------------------------------------------- builders
 type Props = ConstructorParameters<typeof THREE.MeshStandardNodeMaterial>[0];
+const foliageMaterial = (name: string): THREE.NodeMaterial => standard(name, { roughness: 0.9, side: THREE.DoubleSide });
+
+/**
+ * A diffuse-only copy of a foliage material (low quality): the physical lighting model cost an
+ * integrated GPU ~3 ms on canopies at 3840×1600. Without the faint specular of a 0.9-rough surface
+ * conifers read a little brighter and more saturated.
+ */
+function lambertCopy(m: THREE.NodeMaterial): THREE.NodeMaterial {
+  const l = new THREE.MeshLambertNodeMaterial({ side: m.side });
+  for (const k of ['positionNode', 'castShadowPositionNode', 'colorNode', 'normalNode', 'maskNode', 'maskShadowNode', 'receivedShadowNode'] as const) {
+    (l as unknown as Record<string, unknown>)[k] = (m as unknown as Record<string, unknown>)[k];
+  }
+  l.name = `${m.name}Lambert`;
+  return l;
+}
 const standard = (name: string, props: Props) => {
   const m = new THREE.MeshStandardNodeMaterial({ metalness: 0, ...props });
   m.name = name;
@@ -129,15 +155,14 @@ function glow(name: string, colour: V3) {
 /** Instanced props and vegetation (one material per slot for every chunk of the stage). */
 export function instanceMaterials(): Record<string, THREE.Material> {
   const shifted = () => OFF.has('hsv') ? vertexRgb() : (hsvShift(vertexRaw(), instB().z, instB().w) as unknown as V3).toVarying() as unknown as V3; // per vertex
-  const fade = () => instB().y as unknown as N;
 
   const flat = standard('Flat', { roughness: 0.85, flatShading: true });
   flat.positionNode = placed();
   flat.colorNode = grade(shifted(), U.tint.Flat);
-  flat.maskNode = dithered(fade());
+  flat.maskNode = dithered(...fadeBand());
   flat.maskShadowNode = bool(true);
 
-  const foliage = standard('Foliage', { roughness: 0.9, side: THREE.DoubleSide });
+  const foliage = foliageMaterial('Foliage');
   const p = placed();
   foliage.positionNode = OFF.has('sway') ? p : p.add(sway(p));
   // shadow passes skip the sway: a 14 cm tip movement is invisible in a shadow from the chase camera,
@@ -152,7 +177,8 @@ export function instanceMaterials(): Record<string, THREE.Material> {
   const nView = cameraViewMatrix.mul(vec4(nWorld, 0)).xyz;
   const facing = nView.mul(sign(dot(nView, positionView.negate()).add(1e-4)));
   if (!OFF.has('normal')) foliage.normalNode = facing.toVarying('v_foliageNormal').normalize();
-  foliage.maskNode = OFF.has('occ') ? dithered(fade()) : dithered(float(1).sub(occluder(5.2, 0.85)).mul(fade()));
+  const [hi, lo] = fadeBand();
+  foliage.maskNode = OFF.has('occ') ? dithered(hi, lo) : dithered(float(1).sub(occluder(5.2, 0.85)).mul(hi), lo);
   foliage.maskShadowNode = bool(true);
   // canopies (more than 1.5 m above the instance base) take only part of their shadow: thin chips
   // shadow each other and the original's GI lit canopy interiors; ground cover keeps full shadows
@@ -162,9 +188,36 @@ export function instanceMaterials(): Record<string, THREE.Material> {
 
   const g = glow('Glow', vertexRgb());
   g.positionNode = placed();
-  g.maskNode = dithered(fade());
+  g.maskNode = dithered(...fadeBand());
   g.maskShadowNode = bool(true);
-  return { Flat: flat, Foliage: foliage, Glow: g };
+  // far vegetation levels (stage.ts, beyond 90 m): no sway (it is off there anyway) and no see-through
+  // test, which saves vertex and pixel work on the most numerous triangles
+  const far = foliageMaterial('FoliageFar');
+  far.positionNode = p;
+  far.castShadowPositionNode = p;
+  far.colorNode = foliage.colorNode;
+  if (foliage.normalNode) far.normalNode = foliage.normalNode;
+  far.maskNode = dithered(hi, lo);
+  far.maskShadowNode = bool(true);
+  far.receivedShadowNode = foliage.receivedShadowNode;
+  if (OFF.has('lit')) foliage.lights = far.lights = false;
+  if (OFF.has('mask')) flat.maskNode = foliage.maskNode = g.maskNode = far.maskNode = null;
+  const out: Record<string, THREE.Material> = {
+    Flat: flat, Foliage: foliage, FoliageFar: far, Glow: g,
+    // diffuse-only foliage for low quality (stage.ts setLod swaps them in)
+    FoliageL: lambertCopy(foliage), FoliageFarL: lambertCopy(far),
+  };
+  // solid twins: the same materials without the dither test, for instances that are fully in view and
+  // away from the car (stage.ts picks per instance). A shader that can discard loses the GPU's early
+  // depth test for the whole draw; dropping every discard saved 2.5-4.5 ms on canopies on an
+  // integrated GPU at 3840×1600.
+  for (const [k, m] of Object.entries(out)) {
+    const t = (m as THREE.NodeMaterial).clone() as THREE.NodeMaterial;
+    t.maskNode = null;
+    t.name = `${m.name}Solid`;
+    out[`${k}!`] = t;
+  }
+  return out;
 }
 
 /** Single placed props (the start and finish arches). */

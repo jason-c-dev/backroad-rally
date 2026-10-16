@@ -2,7 +2,8 @@
 //
 //   scene (HDR, MSAA) -> tilt-shift DOF (depth CoC, half-res gather) -> AO (GTAO, half res)
 //   -> exposure + bloom -> grade (white balance, tint, saturation, contrast, shadow gain/offset)
-//   -> ACES (blended by the tone-curve amount) -> vignette + grain -> sRGB
+//   -> ACES (blended by the tone-curve amount) -> vignette + grain -> FXAA (without MSAA)
+//   -> FSR 1 upscale (render scale below 1) -> sRGB
 //
 // The original ran DOF and bloom ahead of its tonemapper and graded inside it; this keeps that
 // order. Every stage has a quality knob; `enabled = false` renders the scene straight to the
@@ -15,6 +16,9 @@ import {
 import { ao } from 'three/examples/jsm/tsl/display/GTAONode.js';
 import { bloom } from 'three/examples/jsm/tsl/display/BloomNode.js';
 import { fxaa } from 'three/examples/jsm/tsl/display/FXAANode.js';
+import { fsr1 } from 'three/examples/jsm/tsl/display/FSR1Node.js';
+import { getViewPosition } from 'three/tsl';
+import { fogPixel } from './fog';
 
 type N = THREE.Node<'float'>;
 type V2 = THREE.Node<'vec2'>;
@@ -35,23 +39,10 @@ export interface PostQuality {
   nightCascades: number;
   /** Night: let a headlight cast shadows (the condition says how many). */
   headlightShadows: boolean;
-}
-
-/**
- * Presets. Measured on the RTX 5070 Ti laptop GPU (WebGL2, finland forward, autopilot, GPU timer):
- * high holds 60 fps at 1920×1080 (8.3 ms GPU) but not at 3840×1600 (13.6 ms mean, 17.8 ms p95);
- * medium holds 3840×1600 (10.2 ms mean, 13.9 ms p95). `pickQuality` chooses by pixel count.
- */
-export const QUALITY: Record<string, PostQuality> = {
-  low: { ao: 0, aoSamples: 8, dofTaps: 0, bloom: false, msaa: 0, cascades: 1, nightCascades: 1, headlightShadows: false },
-  medium: { ao: 0.5, aoSamples: 8, dofTaps: 12, bloom: true, msaa: 0, cascades: 2, nightCascades: 1, headlightShadows: true },
-  high: { ao: 0.5, aoSamples: 16, dofTaps: 16, bloom: true, msaa: 4, cascades: 3, nightCascades: 3, headlightShadows: true },
-};
-
-/** ?quality=auto (the default): high up to about 2560×1440 drawn pixels, medium above. */
-export function pickQuality(asked: string | null, drawnPixels: number): string {
-  if (asked && asked !== 'auto' && QUALITY[asked]) return asked;
-  return drawnPixels > 2560 * 1440 * 1.1 ? 'medium' : 'high';
+  /** Render scale: below 1 the scene and the post chain run on fewer pixels and FSR 1 upscales. */
+  scale: number;
+  /** Height fog once per pixel in this chain instead of per vertex in every material (fog.ts). */
+  postFog: boolean;
 }
 
 export const postU = {
@@ -74,6 +65,10 @@ export const postU = {
   invSize: uniform(new THREE.Vector2(1 / 1920, 1 / 1080)),
   near: uniform(0.5),
   far: uniform(4000),
+  // the scene camera, for world positions from depth (post fog)
+  projInverse: uniform(new THREE.Matrix4()),
+  camWorld: uniform(new THREE.Matrix4()),
+  camPos: uniform(new THREE.Vector3()),
 };
 
 const BLOOM_SCALE = 0.27;
@@ -134,6 +129,8 @@ export class Post {
   enabled = true;
   private aoNode: ReturnType<typeof ao> | null = null;
   private bloomNode: ReturnType<typeof bloom> | null = null;
+  /** Nodes that own render targets, for dispose(). */
+  private owned: { dispose(): void }[] = [];
 
   constructor(private renderer: THREE.WebGPURenderer, private scene: THREE.Scene, private camera: THREE.PerspectiveCamera,
     readonly quality: PostQuality) {
@@ -143,7 +140,10 @@ export class Post {
     const webgpu = !!(renderer.backend as { isWebGPUBackend?: boolean }).isWebGPUBackend;
     const needsDepth = quality.ao > 0 || quality.dofTaps > 0;
     const msaa = webgpu && needsDepth ? 0 : quality.msaa;
+    const scale = Math.min(Math.max(quality.scale || 1, 0.25), 1);
     const scenePass = pass(scene, camera, { samples: msaa });
+    scenePass.setResolutionScale(scale);
+    this.owned.push(scenePass);
     const colour = scenePass.getTextureNode('output');
     const depth = scenePass.getTextureNode('depth');
     const viewDepth = (d: N): N => perspectiveDepthToViewZ(d, postU.near, postU.far).negate() as N;
@@ -169,15 +169,25 @@ export class Post {
         }
         return vec4(acc.div(wsum), r);
       });
-      const blurred = rtt(gather(), null, null, { resolutionScale: 0.5, type: THREE.HalfFloatType });
+      const blurred = rtt(gather(), null, null, { resolutionScale: 0.5 * scale, type: THREE.HalfFloatType });
+      this.owned.push(blurred);
       const r = coc(viewDepth(depth.r as unknown as N));
       hdr = mix(hdr, blurred.rgb, smoothstep(0.6, 2.0, r)) as V3;
+    }
+
+    // ---- height fog per pixel (low quality; otherwise the materials fog per vertex). After the DOF
+    // gather, with the centre pixel's depth: the blurred far ground has nearly one fog value anyway.
+    if (quality.postFog) {
+      const view = getViewPosition(uv(), depth.r, postU.projInverse) as unknown as V3;
+      const world = postU.camWorld.mul(vec4(view, 1)).xyz as unknown as V3;
+      hdr = fogPixel(hdr, world, postU.camPos as unknown as V3);
     }
 
     // ---- ambient occlusion (strong, 2.5 m)
     if (quality.ao > 0) {
       const a = ao(depth, null as unknown as THREE.Node, camera); // normals from depth (flat-shaded scene)
-      a.resolutionScale = quality.ao;
+      a.resolutionScale = quality.ao * scale;
+      this.owned.push(a);
       a.samples.value = quality.aoSamples;
       a.radius.value = 2.5;
       a.thickness.value = 1;
@@ -190,6 +200,7 @@ export class Post {
     if (quality.bloom) {
       const b = bloom(vec4(colour.rgb.mul(postU.exposure), 1), 0.55, 0.4, 1);
       this.bloomNode = b;
+      this.owned.push(b);
       c = c.add(b.rgb) as V3;
     }
 
@@ -204,7 +215,19 @@ export class Post {
     c = c.mul(float(1).add(n.mul(postU.grain))) as V3;
 
     let out: THREE.Node = vec4(saturate(c), 1);
-    if (msaa === 0) out = fxaa(out as THREE.Node<'vec4'>); // FXAA wherever the scene pass has no MSAA
+    if (scale < 1) {
+      // composite at the render scale, anti-alias there, then FSR 1 (edge-adaptive upscale + sharpen)
+      const low = rtt(out as THREE.Node<'vec4'>, null, null, { resolutionScale: scale, type: THREE.HalfFloatType });
+      const aa = fxaa(low);
+      const aaLow = rtt(aa as unknown as THREE.Node<'vec4'>, null, null, { resolutionScale: scale, type: THREE.HalfFloatType });
+      const up = fsr1(aaLow, 0.25);
+      this.owned.push(low, aa, aaLow, up);
+      out = up as unknown as THREE.Node;
+    } else if (msaa === 0) {
+      const aa = fxaa(out as THREE.Node<'vec4'>); // FXAA wherever the scene pass has no MSAA
+      this.owned.push(aa);
+      out = aa;
+    }
     this.pipeline = new THREE.RenderPipeline(renderer, out as THREE.Node<'vec4'>);
     // the pipeline's own output transform encodes sRGB; the tone mapping is done above
     this.pipeline.outputColorTransform = true;
@@ -227,6 +250,9 @@ export class Post {
   /** Per frame: camera depth range, the screen size and the tilt-shift focus from the car's view depth. */
   update(width: number, height: number, carViewDepth: number, dof: DofConfig): void {
     const cam = this.camera;
+    postU.projInverse.value.copy(cam.projectionMatrixInverse);
+    postU.camWorld.value.copy(cam.matrixWorld);
+    postU.camPos.value.setFromMatrixPosition(cam.matrixWorld);
     postU.near.value = cam.near;
     postU.far.value = cam.far;
     postU.aspect.value = width / height;
@@ -253,6 +279,13 @@ export class Post {
       this.renderer.toneMappingExposure = postU.exposure.value;
       this.renderer.render(this.scene, this.camera);
     }
+  }
+
+  /** Free the render targets (a quality change builds a new Post). */
+  dispose(): void {
+    this.pipeline.dispose();
+    for (const n of this.owned) n.dispose();
+    this.owned.length = 0;
   }
 
   /** On a resize or condition change the pipeline is fine; AO and bloom read the drawing buffer size. */
