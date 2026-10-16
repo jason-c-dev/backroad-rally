@@ -31,6 +31,8 @@ const FILES = [
   'stage_runtime.json',
   'conditions.json',
   'fx.json',
+  'damage.json',
+  'hud.json',
   ...['swift', 'pip', 'lama', 'quint', 'kaze'].map((id) => `cars/${id}.json`),
 ];
 

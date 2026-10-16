@@ -2,6 +2,7 @@
 // the user's volumes (localStorage), the decoded sounds, looping voices and one-shots.
 // Browser rules: the context is made suspended and resumes on the first key or click; M mutes; the
 // context suspends while the tab is hidden.
+import { readSection, writeSection } from '../settings';
 import { GROUPS, attenuate, clamp, groupGain, voiceGain, type Attenuation, type Group, type MixJson } from './mix';
 
 export interface SoundEntry {
@@ -42,29 +43,20 @@ export interface UserVolumes {
   groups: Record<Group, number>;
 }
 
-const STORE_KEY = 'backroad-rally.audio';
-
+/** The volumes live in the game's one settings store (src/settings.ts), section 'audio' (backroad-rally.audio). */
 export function loadVolumes(): UserVolumes {
   const v: UserVolumes = { master: 0.8, muted: false, groups: Object.fromEntries(GROUPS.map((g) => [g, 1])) as Record<Group, number> };
-  try {
-    const s = JSON.parse(localStorage.getItem(STORE_KEY) ?? 'null') as Partial<UserVolumes> | null;
-    if (s) {
-      if (typeof s.master === 'number') v.master = clamp(s.master, 0, 1);
-      if (typeof s.muted === 'boolean') v.muted = s.muted;
-      for (const g of GROUPS) if (typeof s.groups?.[g] === 'number') v.groups[g] = clamp(s.groups[g], 0, 1);
-    }
-  } catch {
-    // private window or blocked storage: defaults
+  const s = readSection<UserVolumes>('audio');
+  if (s) {
+    if (typeof s.master === 'number') v.master = clamp(s.master, 0, 1);
+    if (typeof s.muted === 'boolean') v.muted = s.muted;
+    for (const g of GROUPS) if (typeof s.groups?.[g] === 'number') v.groups[g] = clamp(s.groups[g], 0, 1);
   }
   return v;
 }
 
 export function saveVolumes(v: UserVolumes): void {
-  try {
-    localStorage.setItem(STORE_KEY, JSON.stringify(v));
-  } catch {
-    // not stored: fine
-  }
+  writeSection('audio', v);
 }
 
 /** Where the listener is (on the car, like UE's listener override) and which way is right on screen. */

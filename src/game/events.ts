@@ -12,6 +12,7 @@
 //   splash         driving into or through a ford (stages that have one)
 //   crowdReaction  spectators react (src/world/crowd.ts): cheer, near miss, gasp, groan, applause
 //   breakable      the car drove through a bush or knocked over a post (src/world/breakables.ts)
+//   damage         a hit damaged the car (src/game/damage.ts): which part took most, how much, the new total
 //   countdown, go, finish, penalty   the stage flow (src/game/stageRun.ts)
 import type { Vector3 } from 'three';
 import type { Surface } from '../sim/tuning';
@@ -33,13 +34,18 @@ export interface GameEvents {
   /** The car broke a roadside breakable (src/world/breakables.ts): `reaction` burst (a bush: leaves scatter) or fly
    * (a post knocked over); `sound`, `volume`, `pitch` = the original's choice for it (fx.json breakables). */
   breakable: { pos: Vector3; mesh: string; category: string; reaction: 'burst' | 'fly'; speed: number; sound: string; volume: number; pitch: number };
+  /** A committed hit damaged the car (src/game/damage.ts). `part` = the part that took the largest share, `amount` =
+   * overall damage added (0..1), `total` = the new overall value, `parts` = every part (front, rear, left, right, engine,
+   * suspension), `kmh` = the hit's velocity change, `stage` 0 clean .. 3 fire, 4 terminal. */
+  damage: { part: string; amount: number; total: number; parts: number[]; kmh: number; terminal: boolean; stage: number };
   // stage flow (src/game/stageRun.ts)
   /** A countdown digit appears (3, 2, 1). */
   countdown: { n: number };
   /** The start: the clock runs. */
   go: Record<string, never>;
-  /** Over the finish line (`dnf` false), or out of the stage (`dnf` true, straight to the results). */
-  finish: { dnf: boolean; time: number };
+  /** Over the finish line (`dnf` false), or the run retired (`dnf` true, `reason` why: terminal damage, left the
+   * stage, time cap). Either way the car coasts to a stop and the results follow. */
+  finish: { dnf: boolean; time: number; reason: string };
   /** A reset or recover cost `seconds` (+5 s). */
   penalty: { seconds: number; total: number };
 }

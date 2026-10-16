@@ -31,6 +31,8 @@ is playable so far).
 - Rendering: [three.js](https://threejs.org/) (MIT).
 - Sound effects and music generated with [ElevenLabs](https://elevenlabs.io/).
 - Engine and UI sounds are synthesised by the project's own scripts.
+- HUD font: [Inter](https://rsms.me/inter/) by The Inter Project Authors (SIL Open Font
+  License 1.1, `public/fonts/OFL.txt`).
 
 ## Licence
 
@@ -53,11 +55,13 @@ The game opens on the first stage, finland: an intro card, a 3-2-1 countdown
 (the clock starts on "go"), then about 3 km of gravel to the finish arch, and
 the result. Straying more than 12 m off the road for 0.4 s puts the car back on it a few
 metres behind, stopped, for +5 s; so does R (recover). Enter restarts the stage.
+Crash hard enough and the car is wrecked: it coasts to a stop and the run ends as
+"dnf · terminal damage".
 
 Keys: W/S throttle and brake, A/D steer, Space handbrake, R recover, T traction
 assist, C camera, L livery, Enter restart, K next time of day, P post-processing
-on or off. A gamepad works too: triggers, left
-stick, L1 handbrake, Y recover, X camera.
+on or off, U km/h or mph, I speed as a number or a dial, F3 the debug panel. A
+gamepad works too: triggers, left stick, L1 handbrake, Y recover, X camera.
 
 URL options:
 
@@ -74,6 +78,9 @@ URL options:
 | `?post=0` | no post-processing: the scene straight to the screen at the same exposure (P toggles) |
 | `?ao=0`, `?dof=0`, `?bloom=0`, `?msaa=0`, `?cascades=1`, `?hlshadow=0`, `?shadowmap=1024`, `?shadowfar=100` | switch single effects off or down, on top of the quality preset |
 | `?hide=tree,grass`, `?lodcuts=50,120,200`, `?lodblend=0.1`, `?shadowrange=180`, `?lookoff=fog,mask,lit` | development: hide instance categories, move the vegetation detail switches, turn shader features off (for measuring their cost) |
+| `?damage=0\|0.5\|1` | damage level: 1 full (default), 0.5 half, 0 off (hits still spark and sound) |
+| `?startdamage=0.8` | development: start the first run already damaged (smoke from 0.35, fire from 0.7) |
+| `?units=kmh\|mph`, `?speedo=number\|dial`, `?hud=80..130` | HUD speed units, speed display and size (%) for this visit, without saving them |
 | `?hud=0` | hide every overlay (screenshots) |
 | `?gputime` | measure GPU time per frame with timer queries (for the check scripts) |
 | `?webgl` | force the WebGL2 renderer instead of WebGPU |
@@ -181,6 +188,54 @@ tuned by `public/data/fx.json`:
   drives scenes on finland (WebGL2; `--webgpu --noshot` checks the shaders compile there),
   saves screenshots and prints live particles, skid segments and the events each scene raised.
 
+### Damage
+
+`src/game/damage.ts`, with the numbers in `public/data/damage.json`:
+
+- **Hits** come from the car body's contact impulses in the physics solver
+  (`src/game/contacts.ts`, read before every 120 Hz step without touching the
+  simulation): a hit's size is the velocity change it caused, impulse over mass, in
+  km/h. Hits within 0.2 s merge into one, sized by the largest. Contacts with the
+  ground while the car is upright (landings, scrapes) never count.
+- **Damage per hit** is ((km/h − 15) / 85)² × the level, so a head-on 60 km/h stop
+  costs about 0.28 at full damage. A total of 1, or one hit of 110 km/h or more, wrecks
+  the car and ends the run.
+- **Effects:** engine torque × (1 − 0.3 × damage) (0.15 once wrecked), a small
+  steering pull toward one side (0.05 × damage^1.5) that the first real hit decides,
+  paint dirtied toward a mud colour (dust on loose ground adds a little too), smoke
+  from the engine from 0.35 (darker and thicker as it grows) and flames from 0.7.
+- **Parts:** each hit is also shared out over six parts by where it landed on the
+  car (front, rear, left, right, engine, suspension); they only drive the HUD's
+  warning lights, every effect uses the overall value.
+- **Restart** (Enter) repairs the car. Nothing carries between stages yet.
+- **Events:** `damage { part, amount, total, parts, kmh, terminal, stage }` on every
+  damaging hit; `finish { dnf, time, reason }` when a run finishes or retires.
+
+### HUD
+
+`src/hud/stageHud.ts`, an HTML/CSS overlay laid out from `public/data/hud.json`
+(sizes in units of a 1080-pixel-tall screen, scaled by the shortest window side and
+the HUD size setting):
+
+- **Top right:** the stage time in a fixed-width panel (tabular digits, so it never
+  changes width), then a +5.0 s pop for each penalty and the penalties so far. Slots
+  for the live position, the ghost delta and the best time wait under it, hidden until
+  the career and ghosts exist.
+- **Left:** the stage progress, start at the bottom, finish at the top.
+- **Bottom left:** six damage warning lights (front, rear, engine; left, right,
+  suspension): off, flashing yellow for a scratch, yellow when damaged, flashing red
+  for major damage and red when broken; all red when wrecked. Hidden with `?damage=0`.
+- **Bottom centre:** the gear gate, an H pattern with the current gear lit (reverse
+  in red).
+- **Bottom right:** the speed as a number or a dial, in km/h or mph.
+- **Settings** live in the browser (`src/settings.ts`, one `localStorage` key per
+  section: `backroad-rally.hud` for units, speed display, HUD size and the debug
+  panel; `backroad-rally.audio` for the volumes). U, I and F3 change and save them;
+  the URL options above apply to one visit only.
+- **Check:** `node tools/check/hud.mjs [--webgl] [--shots spec.json]` sets the window
+  size, HUD settings, speed and damage for each shot and reports any HUD panel that
+  overlaps another or leaves the window.
+
 ### Audio
 
 Sound starts on the first key or click (browsers keep audio off until then; a
@@ -248,6 +303,7 @@ building the site needs none of this.
 | `blender -b <source>/Art/Source/Stages/<id>.blend -P tools/blender/export_stage_glb.py -- --stage finland` | `public/assets/stages/<id>.glb`: terrain tiles, backdrop and bridges; material names are the surfaces |
 | `blender -b -P tools/blender/export_env_glb.py -- --meshes <list> --name finland` | `public/assets/env/env_<id>.glb`: the stage's vegetation and props, one node per mesh |
 | `node tools/convert/glb.mjs <in.glb> [out.glb]` | compresses a GLB for the web: drops the flat normals (kept on foliage, whose canopy normals shape the shading), welds, quantizes, meshopt |
+| `node tools/convert/fonts.mjs` | `public/fonts/`: the HUD's Inter faces (regular, semibold) as WOFF2, with their licence (needs `woff2_compress`) |
 
 The Blender scripts open the source files read-only and never save them.
 
