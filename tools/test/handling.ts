@@ -253,7 +253,7 @@ class Run {
       const a = c.arcade as { dbgStabYaw?: number; dbgCountersteer?: number } | null;
       console.log(`  ph${this.phase} t=${this.t.toFixed(2)} kmh=${this.kmh.toFixed(1)} g${c.gear} rpm=${c.rpm.toFixed(0)} in=${input.throttle.toFixed(2)}/${input.brake.toFixed(2)}/${input.steer.toFixed(2)}${input.handbrake ? '/hb' : ''} ` +
         `sm=${c.smoothedSteer.toFixed(2)} app=${c.appliedSteer.toFixed(2)} slip=${c.bodySlipDeg.toFixed(1)} yaw=${c.yawRateDeg.toFixed(1)} pw=${c.powerSlide.toFixed(2)} str=${c.powerStrength.toFixed(2)} ` +
-        `rspin=${c.rearSpinCms.toFixed(0)} fspin=${c.frontSpinCms.toFixed(0)} tc=${c.tcScale.toFixed(2)} stab=${(a?.dbgStabYaw ?? 0).toFixed(0)} cs=${(a?.dbgCountersteer ?? 0).toFixed(2)} ` +
+        `rspin=${c.rearSpinCms.toFixed(0)} fspin=${c.frontSpinCms.toFixed(0)} tc=${c.tcScale.toFixed(2)} share=${c.estimateRearDriveShare(input.throttle).toFixed(2)} stab=${(a?.dbgStabYaw ?? 0).toFixed(0)} cs=${(a?.dbgCountersteer ?? 0).toFixed(2)} ` +
         `wheels=${c.wheels.map((w) => `${w.slipAngleDeg.toFixed(0)}/${w.longSlipCms.toFixed(0)}`).join(' ')}`);
     }
     c.input = input;

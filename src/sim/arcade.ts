@@ -90,7 +90,7 @@ export class Arcade implements ArcadeLayer {
       for (let i = first; i < first + 2; i++) {
         const w = v.wheels[i];
         if (w.inContact) {
-          sum += Math.max(0, w.longSlipCms);
+          sum += w.spinCms; // Chaos' wheelspin, not the tyre's working slip (vehicle.ts)
           n++;
         }
       }

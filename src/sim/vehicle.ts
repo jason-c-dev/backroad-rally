@@ -41,8 +41,15 @@ export interface WheelState {
   angle: number;
   /** Contact-patch slip, UE units for the ported logic: cm/s. Lat + = sliding right. */
   latSlipCms: number;
-  /** |omega| r - |v along|: + = wheelspin, - = locking. */
+  /** |omega| r - |v along|: + = wheelspin, - = locking. The tyre's working slip is in here too. */
   longSlipCms: number;
+  /**
+   * Wheelspin as Chaos reports it (cm/s), which is what the arcade layers' thresholds are in: a
+   * Chaos wheel rolls at the ground speed and only spins by the drive torque it can't pass on,
+   * (excess / wheel inertia) x one 60 Hz step, capped at 30 rad/s (FSimpleWheelSim::Simulate).
+   * Zero while the tyre holds the drive, however much it slips doing so.
+   */
+  spinCms: number;
   /** Tyre slip angle (deg). */
   slipAngleDeg: number;
   groundSpeedCms: number;
@@ -98,7 +105,22 @@ export const TYRE = {
   wheelTcMargin: 0.3,
   /** Slip ratio where the wheel traction control starts to take the margin back. */
   wheelTcSlip: 0.1,
+  /**
+   * The traction-control share (estimateRearDriveShare) divides by a wheel's grip, which UE reads
+   * from Chaos' suspension *spring* force (FWheelStatus.SpringForce), not the wheel load. UE's own
+   * traces (Kd8: share 0.70 swift, 1.10 lama, 0.83 quint, 0.70 kaze in 4th at full throttle) put
+   * that force at 0.64-0.79 of our load; 0.72 lands every car's share on UE's.
+   */
+  tcLoadScale: 0.72,
 };
+/** Chaos ThrottleInputRate / BrakeInputRate defaults and RallyCar's HandbrakeInputRate (per s). */
+const PEDAL_RISE = 6;
+const PEDAL_FALL = 10;
+const HANDBRAKE_RATE = 30;
+/** Chaos wheel defaults (UChaosVehicleWheel: WheelMass 20 kg, MaxWheelspinRotation 30 rad/s) and UE's fixed 60 Hz step. */
+const CHAOS_WHEEL_MASS = 20;
+const CHAOS_MAX_SPIN = 30;
+const CHAOS_DT = 1 / 60;
 const COM_BASE_HEIGHT = 0.62; // m above the ground: UE com_offset_cm z is relative to this
 const BODY_CLEARANCE = 0.22; // chassis collider bottom above the ground at rest
 
@@ -226,7 +248,7 @@ export class Vehicle {
       });
       this.wheels.push({
         inContact: false, surface: 'none', contactPoint: new Vector3(), normal: new Vector3(0, 1, 0),
-        compression: 0, load: 0, omega: 0, angle: 0, latSlipCms: 0, longSlipCms: 0, slipAngleDeg: 0,
+        compression: 0, load: 0, omega: 0, angle: 0, latSlipCms: 0, longSlipCms: 0, spinCms: 0, slipAngleDeg: 0,
         groundSpeedCms: 0, arcadeGrip: 1,
       });
     }
@@ -295,6 +317,7 @@ export class Vehicle {
     this.shiftTimer = 0;
     this.standstillBrakeTime = 0;
     this.turboBoost = 0;
+    this.throttleInput = this.brakeInput = this.handbrakeInput = 0;
     this.readBody();
   }
 
@@ -316,9 +339,10 @@ export class Vehicle {
     this.arcade?.beforeSteering(this, dt);
     this.updateSteering(dt);
     const { throttle, brake, handbrake } = this.standstillBrake(dt);
+    this.updatePedals(dt, throttle, brake, handbrake);
     this.updateGearbox(dt, throttle, brake);
     this.updateTurbo(dt);
-    this.applyWheelForces(dt, throttle, brake, handbrake);
+    this.applyWheelForces(dt, this.throttleInput * this.throttleInput, this.brakeInput, this.handbrakeInput);
     this.applyAero();
     this.airTime = this.wheelsInContact === 0 ? this.airTime + dt : 0;
     this.arcade?.applyForces(this, dt);
@@ -438,6 +462,29 @@ export class Vehicle {
   damageSteerPull = 0;
   damageTorqueScale = 1;
 
+  /**
+   * Chaos' pedal path (UChaosVehicleMovementComponent): each input moves toward its target at a
+   * rise / fall rate (throttle and brake 6 / 10 per s, the handbrake 30 as RallyCar sets it), and
+   * the engine gets the throttle *squared* (UChaosWheeledVehicleSimulation::ApplyInput). Partial
+   * throttle (0.3 in a slide) is therefore ~0.1 of the torque, which is what costs UE's cars their
+   * speed in a slide; the brake stays linear.
+   */
+  throttleInput = 0;
+  brakeInput = 0;
+  handbrakeInput = 0;
+
+  private updatePedals(dt: number, throttle: number, brake: number, handbrake: boolean): void {
+    const rate = (cur: number, target: number, rise: number, fall: number) => {
+      const d = target - cur;
+      const rising = (d > 0) === (cur > 0) || (d !== 0 && cur === 0);
+      const max = dt * (rising ? rise : fall);
+      return cur + clamp(d, -max, max);
+    };
+    this.throttleInput = rate(this.throttleInput, clamp(throttle, 0, 1), PEDAL_RISE, PEDAL_FALL);
+    this.brakeInput = rate(this.brakeInput, clamp(brake, 0, 1), PEDAL_RISE, PEDAL_FALL);
+    this.handbrakeInput = rate(this.handbrakeInput, handbrake ? 1 : 0, HANDBRAKE_RATE, HANDBRAKE_RATE);
+  }
+
   /** Brake held at a standstill means reverse, after a short hold (UE Tick). */
   private standstillBrake(dt: number): { throttle: number; brake: number; handbrake: boolean } {
     const In = this.input;
@@ -544,7 +591,8 @@ export class Vehicle {
   private centre = new Vector3();
   private pv = new Vector3();
 
-  private applyWheelForces(dt: number, throttle: number, brake: number, handbrake: boolean): void {
+  /** throttle: what the engine gets (Chaos: the rate-limited input squared); brake, handbrake: 0..1. */
+  private applyWheelForces(dt: number, throttle: number, brake: number, handbrake: number): void {
     const t = this.t;
     const body = this.body;
     body.resetForces(true);
@@ -552,8 +600,15 @@ export class Vehicle {
     const R = t.wheelRadius;
     const ratio = this.gearRatio();
     const crank = this.engineTorque(throttle);
+    // The spin readout's engine: Chaos' wheels roll at the ground speed, so its engine turns at
+    // road speed (plus a little slip) and never reaches the limiter through wheelspin. Ours reads
+    // the spinning wheels, which hit the limiter and cut the drive a real slide is made of.
+    const roadRpm = ((Math.abs(this.forwardSpeed) / t.wheelRadius) * 60 / (2 * Math.PI)) * Math.abs(ratio) * t.finalDrive;
+    const crankRoad = this.shiftTimer > 0 || this.gear === 0 || throttle <= 0 || roadRpm >= t.maxRpm ? 0
+      : throttle * torqueShare(t, Math.max(t.idleRpm, roadRpm) / t.maxRpm) * this.appliedMaxTorque;
     const reflected = TYRE.engineInertia * (ratio * t.finalDrive) ** 2;
-    const engineBraking = throttle <= 0.02 && this.gear !== 0 && this.shiftTimer === 0;
+    // Chaos: engine braking whenever the throttle reaching the engine is zero
+    const engineBraking = throttle < 1e-6 && this.gear !== 0 && this.shiftTimer === 0;
     const steerRad = this.wheelAngleDeg * DEG;
     const cs = Math.cos(steerRad), sn = Math.sin(steerRad);
 
@@ -563,12 +618,14 @@ export class Vehicle {
       const inertia = TYRE.wheelInertia + (d.driven ? reflected * d.driveShare : 0);
       // torques on the wheel
       let driveT = d.driven ? crank * ratio * t.finalDrive * t.efficiency * d.driveShare : 0;
+      const driveAsked = d.driven ? crankRoad * ratio * t.finalDrive * t.efficiency * d.driveShare : 0; // the spin readout's drive
       // the limiter per driven wheel: with open differentials one spinning wheel would otherwise
       // run far past it while the engine reads the average
       if (driveT !== 0 && (Math.abs(w.omega) * Math.abs(ratio) * t.finalDrive * 60) / (2 * Math.PI) >= t.maxRpm) driveT = 0;
       let brakeT = brake * d.axle.brake_torque;
-      if (handbrake && !d.front) brakeT += d.axle.handbrake_torque;
       if (engineBraking && d.driven) brakeT += t.engineBrake * this.rpm;
+      // Chaos ApplyInput: the handbrake replaces the wheel's brake torque while it is held
+      if (handbrake > 0 && !d.front && d.axle.handbrake_torque > 0) brakeT = handbrake * d.axle.handbrake_torque;
       if (w.inContact) brakeT += TYRE.rollingResistance * w.load * R;
 
       if (!w.inContact) {
@@ -577,7 +634,7 @@ export class Vehicle {
         const db = (dt * brakeT) / inertia;
         om = Math.abs(om) <= db ? 0 : om - Math.sign(om) * db;
         w.omega = om;
-        w.latSlipCms = w.longSlipCms = w.slipAngleDeg = w.groundSpeedCms = 0;
+        w.latSlipCms = w.longSlipCms = w.spinCms = w.slipAngleDeg = w.groundSpeedCms = 0;
         w.angle += w.omega * dt;
         continue;
       }
@@ -601,6 +658,10 @@ export class Vehicle {
       // longitudinal: semi-implicit wheel spin against a linear tyre, then the combined-slip limit
       const vRef = Math.max(Math.abs(vLong), TYRE.slipRefSpeed);
       const fMaxLong = fMax * TYRE.longPeak;
+      // Chaos' wheelspin readout, from the drive before any traction control
+      const excessT = brakeT > Math.abs(driveAsked) ? 0 : Math.abs(driveAsked) - fMaxLong * R;
+      w.spinCms = excessT > 0
+        ? Math.min(CHAOS_MAX_SPIN, (excessT / (0.5 * CHAOS_WHEEL_MASS * R * R)) * CHAOS_DT) * R * 100 : 0;
       // Chaos' per-wheel traction control (axle traction_control): the wheel gets what its tyre
       // passes on plus a margin that shrinks as the wheel's slip ratio grows past wheelTcSlip, and
       // turns into a deficit by twice that: wheelspin holds at a few tens of percent
@@ -725,7 +786,7 @@ export class Vehicle {
       if (w.inContact) {
         // UE: spring force x the physical material's friction x the wheel's friction multiplier
         // (no TYRE.gripScale: the traction-control shares in cars_tuning.json are in those units)
-        grip += (w.load * this.surfaceGrip(i) * w.arcadeGrip) / TYRE.gripScale;
+        grip += (w.load * TYRE.tcLoadScale * this.surfaceGrip(i) * w.arcadeGrip) / TYRE.gripScale;
         n++;
       }
     }
