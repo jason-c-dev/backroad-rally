@@ -120,6 +120,82 @@ The quality tiers (`src/look/quality.ts`):
   adapter and WebGL2 context). Browsers may ignore it: desktop Chrome on Linux draws
   with the GPU it runs on, which on a hybrid laptop is the integrated one.
 
+### Effects
+
+Dust, gravel, skid marks, exhaust pops and spectators (`src/fx/`, `src/world/crowd.ts`),
+tuned by `public/data/fx.json`:
+
+- **Particle pools.** Dust (3072), puffs (512, kept for rain splashes), chips (1536),
+  sparks (384) and flames (256) are simulated on the CPU and drawn as one instanced draw
+  each; every frame the live particles are packed to the front of their buffers and only
+  that part is uploaded. A full pool recycles its oldest particle.
+- **Dust** rises from each wheel on loose ground from 12 km/h (full at 110), more when the
+  car slides, with colour, rate, size and life per surface (tarmac only while sliding) and
+  a tint per time of day. The puffs are soft translucent spheres: they fade toward their
+  silhouette, break into fine dots at the edge when seen from the game camera (from 16 to
+  26 m away), and fade out where they meet the ground (0.6 m, from the depth buffer; not on
+  low quality). They are lit without direction from the sun and sky, plus a little glow so
+  they read at night.
+- **Chips and flecks:** gravel chips fly back from a sliding or spinning wheel, grass and
+  earth flecks off the road at speed; they bounce down and lie flat. A landing after 0.3 s
+  or more in the air throws a ring of dust; a crash throws sparks and a puff of dust.
+- **Skid marks:** 6144 quads of 35 cm in a ring, laid while a tyre slides sideways, spins,
+  locks or the handbrake is on; they stay 25 s, then fade over 12 s (in the shader, by
+  each mark's spawn time). Overlapping joints don't darken: a mark fails the depth test
+  where an earlier one already lies.
+- **Breakables:** the car drives through roadside bushes, which vanish in a burst of
+  leaves, and knocks marker posts over, which tumble and come to rest lying down
+  (`src/world/breakables.ts`; a proximity test, no colliders, like the original). A restart
+  puts them back. Trees and rocks near the road stay solid.
+- **Exhaust:** pops on a quick lift at high revs, on hard upshifts and on downshifts, and
+  the turbo cars' anti-lag crackle; the flames are bright enough for bloom.
+- **Spectators** stand in the stage's crowd groups off the road (finland: 292). They hop
+  when the car passes close and fast, step away from it, and react as a group: cheers, a
+  near miss, a gasp, a groan after a crash nearby, applause at the finish. Like the
+  original, they have no colliders.
+- **Events.** `src/game/events.ts` is a small typed event bus: `landing`, `impact`,
+  `backfire`, `splash` and `crowdReaction` (audio listens). They only watch the car: the
+  autopilot times and the handling tests are the same with or without them.
+- **Cost:** about 0.3-0.8 ms of GPU time on an integrated GPU at 1920×1080 (low) and
+  0.35 ms on a laptop RTX at 3840×1600 (high), and well under 0.1 ms of CPU a frame.
+  `?fx=0` turns the effects off and `?crowd=0` the spectators, for measuring.
+- **Check:** `node tools/check/fx.mjs [--scenes straight,slide,landing,crowd,bush,post,crash] [--size 1920x800] [--cond night]`
+  drives scenes on finland (WebGL2; `--webgpu --noshot` checks the shaders compile there),
+  saves screenshots and prints live particles, skid segments and the events each scene raised.
+
+### Audio
+
+Sound starts on the first key or click (browsers keep audio off until then; a
+hint says so). **M** mutes, **V** opens the volume panel (master and one slider
+per group, kept in the browser), **.** and **,** skip the music. `?audio=0`
+turns sound off.
+
+- `src/audio/`: Web Audio. The engine is RPM-layered loops per car, on- and
+  off-throttle, crossfaded at equal power by a sound-side rpm (higher than the
+  simulation's, with a lead, a downshift blip and free revving on wheelspin and
+  in the air) and a rev limiter whose cuts are scheduled on the audio clock.
+  Tyre roll and skids follow the surface under each wheel. The stage adds the
+  ambience (day or night), the crowd by the nearest spectators, the bridge
+  rumble, the countdown and finish, crowd reactions, impacts, landings and
+  backfires (from `src/game/events.ts`), and streamed music with a slight duck at
+  full throttle. Everything only reads the game; the simulation runs the same
+  with or without it.
+- The mix: final volume = level × 10^(dB/20) × group × user, with the groups and
+  curves from `public/audio/mix.json`, plus one measured calibration
+  (`CALIBRATION_DB` in `src/audio/mix.ts`): the targets are levels relative to
+  the engine at full throttle (the music about 4 dB under it), measured rather
+  than tuned by ear.
+- `node tools/convert/audio.mjs [--no-music]` writes `public/audio/`: every
+  effect, engine and UI sound as Ogg Opus plus an AAC copy for browsers without
+  Opus (decoded up front), the music for the stages built so far as Opus only
+  (streamed), `manifest.json` and `mix.json`. Loops are padded with their own
+  wrap-around so the codec can't put a click at the seam; all tags are stripped.
+- `node tools/check/audio.mjs --loops` checks every loop's seam after a codec
+  round trip. `npm run build && node tools/check/audio.mjs [--cars swift,pip] [--secs 40] [--jump-at 32] [--out dir]`
+  records a headless autopilot run per car through measurement taps (it serves
+  `dist/` itself on port 4183), saves `<car>.wav`, and prints the loudness per
+  group against the targets, the limiter's cuts and rate, and any clicks.
+
 ### Handling tests
 
 `npm run test:handling` drives every car through the scripted manoeuvres in

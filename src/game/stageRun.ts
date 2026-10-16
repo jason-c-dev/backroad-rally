@@ -3,6 +3,7 @@
 // results. Off-road resets and recovers cost +5 s each. No splits, by design.
 import type { DriverInput } from '../sim/vehicle';
 import type { RoadTracker } from '../sim/road';
+import { events } from './events';
 
 export type Phase = 'intro' | 'countdown' | 'running' | 'finished' | 'results';
 
@@ -35,6 +36,7 @@ export class StageRun {
   /** Seconds since the last penalty (for the HUD pop), Infinity if none. */
   sincePenalty = Infinity;
   private lostTime = 0;
+  private lastDigit = 0;
 
   constructor(readonly tracker: RoadTracker, readonly flow: FlowConfig = DEFAULT_FLOW, restart = false) {
     this.introS = restart ? flow.restart_intro_s : flow.intro_s;
@@ -56,6 +58,7 @@ export class StageRun {
     this.penalties += this.flow.recover_penalty_s;
     this.recovers++;
     this.sincePenalty = 0;
+    events.emit('penalty', { seconds: this.flow.recover_penalty_s, total: this.penalties });
   }
 
   /** Advance the flow; returns the input the car actually gets. */
@@ -67,9 +70,12 @@ export class StageRun {
       case 'intro':
         if (this.t >= this.introS) this.enter('countdown');
         return { throttle: 0, brake: 0, steer: driver.steer, digitalSteer: driver.digitalSteer, handbrake: true };
-      case 'countdown':
+      case 'countdown': {
+        const n = 3 - Math.floor(this.t / f.countdown_step_s);
+        if (n !== this.lastDigit && n >= 1) events.emit('countdown', { n: (this.lastDigit = n) });
         if (this.t >= 3 * f.countdown_step_s) this.enter('running');
         return driver; // jump start allowed; the clock waits for "go"
+      }
       case 'running':
         this.clock += dt;
         this.lostTime = outsideBounds ? this.lostTime + dt : 0;
@@ -92,6 +98,9 @@ export class StageRun {
   private enter(p: Phase): void {
     this.phase = p;
     this.t = 0;
+    // the flow's sound cues (audio listens; nothing here feeds back into the run)
+    if (p === 'running') events.emit('go', {});
+    if (p === 'finished' || (p === 'results' && this.dnf)) events.emit('finish', { dnf: this.dnf, time: this.total });
   }
 }
 
