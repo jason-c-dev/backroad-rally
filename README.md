@@ -1,5 +1,21 @@
 # backroad rally
 
+[![Play](https://img.shields.io/badge/play-in_browser-2ea44f?logo=googlechrome&logoColor=white)](https://jason-c-dev.github.io/backroad-rally/)
+[![Pages deploy](https://img.shields.io/github/actions/workflow/status/jason-c-dev/backroad-rally/pages.yml?branch=main&label=pages&logo=github)](https://github.com/jason-c-dev/backroad-rally/actions/workflows/pages.yml)
+![Status](https://img.shields.io/badge/status-work_in_progress-orange)
+[![License](https://img.shields.io/github/license/jason-c-dev/backroad-rally)](LICENSE)
+![TypeScript](https://img.shields.io/github/package-json/dependency-version/jason-c-dev/backroad-rally/dev/typescript?logo=typescript&logoColor=white&color=3178c6)
+![three.js](https://img.shields.io/github/package-json/dependency-version/jason-c-dev/backroad-rally/three?logo=threedotjs&label=three.js&color=049ef4)
+![Rapier](https://img.shields.io/github/package-json/dependency-version/jason-c-dev/backroad-rally/@dimforge/rapier3d-compat?label=rapier&color=e05d44)
+![Vite](https://img.shields.io/github/package-json/dependency-version/jason-c-dev/backroad-rally/dev/vite?logo=vite&logoColor=white&color=646cff)
+![Vitest](https://img.shields.io/github/package-json/dependency-version/jason-c-dev/backroad-rally/dev/vitest?logo=vitest&logoColor=white&color=6e9f18)
+![Node](https://img.shields.io/badge/node-24-339933?logo=nodedotjs&logoColor=white)
+![Renderer](https://img.shields.io/badge/renderer-WebGPU_%7C_WebGL2-990000?logo=webgl&logoColor=white)
+![Assets](https://img.shields.io/badge/assets-Blender-e87d0d?logo=blender&logoColor=white)
+![Audio](https://img.shields.io/badge/audio-ElevenLabs_%2B_synth-000000)
+[![Built with](https://img.shields.io/badge/built_with-Claude_Code-d97757?logo=claude&logoColor=white)](https://claude.com/claude-code)
+[![Last commit](https://img.shields.io/github/last-commit/jason-c-dev/backroad-rally)](https://github.com/jason-c-dev/backroad-rally/commits/main)
+
 A small top-down rally game with a diorama look, built for the browser with
 [three.js](https://threejs.org/). Five cars from four eras, six point-to-point
 stages, changing times of day and weather, and a short career against simulated
@@ -7,8 +23,8 @@ rivals who also race as ghosts.
 
 It is a non-commercial demo and a work in progress, built in vertical slices.
 
-**Play:** <https://jason-c-dev.github.io/backroad-rally/> (a placeholder until
-the first playable slice lands).
+**Play:** <https://jason-c-dev.github.io/backroad-rally/> (one stage, finland,
+is playable so far).
 
 ## Credits
 
