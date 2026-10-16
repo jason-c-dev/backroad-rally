@@ -314,6 +314,18 @@ export class Stage {
     }
   }
 
+  /** Per instance: 1 = not drawn (a broken breakable, src/world/breakables.ts). Call instancesChanged() after a change. */
+  hiddenInstances!: Uint8Array;
+  private instancesDirty = false;
+  instancesChanged(): void {
+    this.instancesDirty = true;
+  }
+
+  /** An env mesh's parts (geometry per material slot, pivot at the origin), for things placed outside the instance table (crowds). */
+  envParts(mesh: string): { geometry: THREE.BufferGeometry; slot: string }[] | undefined {
+    return this.envGeoms.get(mesh);
+  }
+
   private bandFor(category: string): [number, number] {
     const c = this.runtime.cull[category] ?? this.runtime.cull.default;
     return [c[0] / 100, c[1] / 100];
@@ -329,6 +341,7 @@ export class Stage {
     this.stats.instances = n;
     this.hue = new Float32Array(n);
     this.val = new Float32Array(n);
+    this.hiddenInstances = new Uint8Array(n);
     const p = new THREE.Vector3();
     const nearRoad = this.runtime.collision_near_road_cm / 100;
     // two tables that share mesh names (SM_Bush_A is scenery and, near the road, a breakable): walk
@@ -539,7 +552,9 @@ export class Stage {
    * materials.ts occluder) go to the solid twins, which never discard.
    */
   updateInstances(camera: THREE.Vector3, force = false, car?: THREE.Vector3): void {
-    if (!force && camera.distanceToSquared(this.lastUpdate) < 0.25) return;
+    if (!force && !this.instancesDirty && camera.distanceToSquared(this.lastUpdate) < 0.25) return;
+    this.instancesDirty = false;
+    const hidden = this.hiddenInstances;
     this.lastUpdate.copy(camera);
     if (car) this.lastCar.copy(car);
     const cx = this.lastCar.x - camera.x, cy = this.lastCar.y + 0.8 - camera.y, cz = this.lastCar.z - camera.z;
@@ -561,6 +576,7 @@ export class Stage {
         const end2 = end * end;
         for (let j = 0; j < g.ids.length; j++) {
           const i = g.ids[j];
+          if (hidden[i]) continue;
           const dx = bin[i * F] - camera.x, dy = bin[i * F + 1] - camera.y, dz = bin[i * F + 2] - camera.z;
           const d2 = dx * dx + dy * dy + dz * dz;
           if (d2 >= end2) continue;

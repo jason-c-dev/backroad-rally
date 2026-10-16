@@ -23,6 +23,13 @@ import { Look } from './look/look';
 import { CONDITIONS, pickCondition, type ConditionsJson } from './look/conditions';
 import { QUALITY } from './look/quality';
 import { AutoQuality, LADDER, initialRung } from './look/autoQuality';
+// fx (slice 6)
+import { Fx } from './fx/fx';
+import type { FxJson } from './fx/config';
+import { CarEvents } from './game/carEvents';
+import { Crowd, type CrowdRuntime } from './world/crowd';
+import { Breakables, type BreakablesJson } from './world/breakables';
+import { events as fxEvents } from './game/events';
 
 const params = new URLSearchParams(location.search);
 /** Headless runs: ?timescale=4 runs the game (physics, flow, camera) four times faster than the clock. */
@@ -182,6 +189,47 @@ async function main() {
     if (e.code === 'KeyP') look.setPost(!look.post.enabled);
     if (e.code === 'KeyK') look.setCondition(CONDITIONS[(condIndex = (condIndex + 1) % CONDITIONS.length)]);
   });
+  // --- fx ---
+  // effects (src/fx), spectators (src/world/crowd.ts), breakables (src/world/breakables.ts) and the car's game events (src/game/carEvents.ts).
+  // They hook the level's per-step and per-frame calls and only read the car: the sim runs unchanged.
+  // ?fx=0 draws no effects (events still fire), ?crowd=0 places no spectators.
+  const fxCfg = await load<FxJson>('fx.json');
+  const fx = new Fx(scene, fxCfg, { ...(car as unknown as { exhaust_pos_cm?: number[][]; wheel_width_cm: number; length_cm: number }), id: carId },
+    { enabled: params.get('fx') !== '0' });
+  const carEvents = new CarEvents();
+  const crowd = stageLevel && params.get('crowd') !== '0'
+    ? new Crowd(stageLevel, fxCfg.crowd, (stageLevel.runtime as unknown as { crowd: CrowdRuntime }).crowd, reverse, rapier, world) : null;
+  if (crowd) scene.add(crowd.group);
+  // roadside bushes and posts the car drives through (no colliders, like the original)
+  const breakables = stageLevel ? new Breakables(stageLevel, (fxCfg as unknown as { breakables: BreakablesJson }).breakables,
+    (stageLevel.runtime as unknown as { breakable_radius_cm: Record<string, number> }).breakable_radius_cm ?? {}, rapier, world,
+    fx.enabled ? (p) => fx.pools.chip.emit(p) : null) : null;
+  if (breakables) scene.add(breakables.group);
+  const lookOnQuality = look.onQuality;
+  look.onQuality = (q, name) => {
+    lookOnQuality?.(q, name);
+    fx.setQuality(name);
+  };
+  fx.setQuality(look.qualityName);
+  const levelStep = level.step?.bind(level);
+  level.step = (dt, input) => {
+    const out = levelStep ? levelStep(dt, input) : input;
+    carEvents.step(vehicle, dt);
+    return out;
+  };
+  const levelFrame = level.frame?.bind(level);
+  level.frame = (dt, cameraPos) => {
+    levelFrame?.(dt, cameraPos);
+    fx.update(dt, vehicle, sim.renderPos, sim.renderRot, look);
+    const run = (level as { run?: { phase: string } }).run;
+    crowd?.update(dt, { position: vehicle.position, kmh: vehicle.speedKmh, airborne: vehicle.wheelsInContact === 0 },
+      run?.phase ?? 'running', cameraPos, stageLevel?.drawDistance ?? 2);
+    breakables?.update(dt, vehicle, run?.phase ?? 'running');
+  };
+  fx.warmup();
+  crowd?.warmup();
+  (window as unknown as { __fx: object }).__fx = { fx, crowd, breakables, carEvents, events: fxEvents };
+  // --- /fx ---
   // place the camera, then build every pipeline now rather than mid-run (the loading curtain will cover this)
   chase.update(0, { position: sim.renderPos, forward: new THREE.Vector3(1, 0, 0).applyQuaternion(sim.renderRot), velocity: vehicle.velocity });
   look.update(0, sim.renderPos, innerWidth, innerHeight);
@@ -203,6 +251,16 @@ async function main() {
 
   // read-only handle for tools/check (headless runs)
   (window as unknown as { __br: object }).__br = { vehicle, chase, model, sim, level, renderer, perf, backend, carId, look, gpu, auto };
+
+  // --- audio ---
+  // sound (src/audio): engine, tyres, world, music. It reads the game every frame and never writes to it.
+  // M mute, V volume panel, . and , skip the music; ?audio=0 turns it off (loaded as its own chunk).
+  void import('./audio').then(({ startAudio }) => startAudio({
+    vehicle, carId, stageId, reverse, camera: chase.camera, params,
+    level: level as unknown as Parameters<typeof startAudio>[0]['level'],
+    isNight: () => look.cond?.name === 'night',
+  })).catch((e) => console.error('audio:', e));
+  // --- /audio ---
 
   let liveryIndex = 0;
   let last = performance.now();
