@@ -118,6 +118,9 @@ function encode(raw, channels, dest, codec, bitrate) {
 
 const manifest = JSON.parse(readFileSync(join(dataDir, 'audio.json'), 'utf8'));
 const mix = stripDocs(JSON.parse(readFileSync(join(dataDir, 'audio_mix.json'), 'utf8')));
+// The port's own changes on top of the original mix. Crowds: the original's 0.8 sat ~18 dB under the
+// engine once the listener moved to the car; raised ~5 dB on playtest (2026-10-16).
+mix.groups.crowd = 1.4;
 mkdirSync(out, { recursive: true });
 
 const sounds = {};

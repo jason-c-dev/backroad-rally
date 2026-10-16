@@ -38,7 +38,8 @@ describe('mix maths', () => {
   });
 
   it('groups are the spec values', () => {
-    expect(mix.groups).toEqual({ engine: 0.9, surface: 0.5, sfx: 0.9, ui: 0.7, music: 0.5, ambience: 0.6, crowd: 0.8, weather: 0.6 });
+    // crowd: the original 0.8, raised on playtest (tools/convert/audio.mjs)
+    expect(mix.groups).toEqual({ engine: 0.9, surface: 0.5, sfx: 0.9, ui: 0.7, music: 0.5, ambience: 0.6, crowd: 1.4, weather: 0.6 });
   });
 
   it('crossfades at equal power between neighbours', () => {
