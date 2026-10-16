@@ -16,6 +16,8 @@ export interface CarModel {
   wheels: Record<WheelKey, THREE.Object3D>;
   wheelRadius: number;
   setLivery(l: Livery): void;
+  /** Paint lerped toward `dirt` by `amount` 0..1 (the original's SetPaintGrime: damage and dust; rims stay clean). */
+  setGrime(amount: number, dirt: string): void;
   /** Front-wheel angle (rad, + = right) and each wheel's spin angle (rad) and suspension compression (m). */
   pose(steer: number, wheels: { angle: number; compression: number }[]): void;
 }
@@ -50,16 +52,30 @@ export async function loadCarModel(car: CarData): Promise<CarModel> {
     wheels[k] = w;
   }
 
-  const tint = (slot: string, hex: string) => mats.get(slot)?.color.set(hex);
+  let livery = car.liveries[0];
+  let grime = 0;
+  let dirtHex = '';
+  const dirtColor = new THREE.Color();
+  // paint lerps toward the dirt in linear colour, as UE's FMath::Lerp on FLinearColor did
+  const paint = (slot: string, hex: string) => mats.get(slot)?.color.set(hex).lerp(dirtColor, grime);
   const model: CarModel = {
     root,
     wheels,
     wheelRadius: cm(car.wheel_radius_cm),
     setLivery(l) {
-      tint('Paint1', l.paint1);
-      tint('Paint2', l.paint2);
-      tint('Paint3', l.paint3);
-      tint('Rim', l.rim);
+      livery = l;
+      paint('Paint1', l.paint1);
+      paint('Paint2', l.paint2);
+      paint('Paint3', l.paint3);
+      mats.get('Rim')?.color.set(l.rim);
+    },
+    setGrime(amount, dirt) {
+      amount = Math.min(Math.max(amount, 0), 1);
+      if (Math.abs(amount - grime) < 0.002 && dirt === dirtHex) return;
+      grime = amount;
+      dirtHex = dirt;
+      dirtColor.set(dirt);
+      model.setLivery(livery);
     },
     pose(steer, state) {
       WHEELS.forEach((k, i) => {

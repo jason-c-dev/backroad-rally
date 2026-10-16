@@ -14,23 +14,77 @@ body { font-family: system-ui, sans-serif; }
 }
 #fatal { top: auto; bottom: 8px; color: #db1f0f; white-space: pre-wrap; }
 
-/* stage HUD (slice 4; hud.json layout comes with game flow) */
-#stage-hud { position: fixed; inset: 0; pointer-events: none; font-variant-numeric: tabular-nums; text-transform: lowercase; }
-#stage-hud .hud-timer { position: absolute; top: 16px; right: 20px; display: flex; flex-direction: column; align-items: flex-end;
-  background: var(--panel); padding: 6px 12px; border-radius: 6px; }
-#stage-hud .hud-timer .t { font-size: 28px; font-weight: 600; }
-#stage-hud .hud-timer .pen { font-size: 14px; color: var(--accent); min-height: 1em; }
-#stage-hud .hud-timer .pen.pop { font-weight: 700; }
-#stage-hud .hud-progress { position: absolute; left: 20px; top: 25%; height: 50%; width: 6px; background: var(--panel); border-radius: 3px; overflow: hidden; }
-#stage-hud .hud-progress .fill { position: absolute; bottom: 0; width: 100%; background: var(--ink); }
-#stage-hud .hud-speed { position: absolute; right: 20px; bottom: 16px; background: var(--panel); padding: 4px 12px; border-radius: 6px; }
-#stage-hud .hud-speed .v { font-size: 32px; font-weight: 600; }
-#stage-hud .hud-speed .u { font-size: 13px; margin-left: 4px; }
-#stage-hud .hud-gear { position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%); background: var(--panel);
-  padding: 4px 14px; border-radius: 6px; font-size: 26px; font-weight: 600; }
-#stage-hud .hud-card { position: absolute; left: 50%; top: 38%; transform: translate(-50%, -50%); text-align: center;
-  background: var(--panel); padding: 14px 28px; border-radius: 8px; font-size: 16px; }
-#stage-hud .hud-card .big { font-size: 34px; font-weight: 600; }
-#stage-hud .hud-card .huge { font-size: 72px; font-weight: 700; line-height: 1; }
+/* stage HUD (src/hud/stageHud.ts; hud.json): --u = px per Slate unit (hud size included), --d = the DPI factor alone;
+   --uf / --df the same for font sizes, which Slate gives in points (x 96/72) */
+@font-face { font-family: 'Inter'; font-weight: 400; font-display: block; src: url('/fonts/Inter-Regular.woff2') format('woff2'); }
+@font-face { font-family: 'Inter'; font-weight: 600; font-display: block; src: url('/fonts/Inter-SemiBold.woff2') format('woff2'); }
+#stage-hud { --u: 1px; --d: 1px; --uf: 1.333px; --df: 1.333px; position: fixed; inset: 0; pointer-events: none; overflow: hidden;
+  font-family: Inter, system-ui, sans-serif; font-weight: 400; text-transform: lowercase; font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1; color: #fff; line-height: 1.2; }
+#stage-hud .mono { display: inline-grid; justify-items: end; }
+#stage-hud .mono > .tpl, #stage-hud .mono > .val { grid-area: 1 / 1; white-space: pre; }
+#stage-hud .mono > .tpl { visibility: hidden; }
+/* white text over any ground: a thin dark outline and a soft drop shadow (the original's OutlinedFont) */
+#stage-hud .outlined { -webkit-text-stroke: calc(var(--d) * 2) rgba(0, 0, 0, 0.45); paint-order: stroke fill;
+  text-shadow: calc(var(--d) * 1) calc(var(--d) * 1) 0 rgba(0, 0, 0, 0.35); }
+#stage-hud .outlined.big { -webkit-text-stroke-width: calc(var(--d) * 4); text-shadow: calc(var(--d) * 2) calc(var(--d) * 2) 0 rgba(0, 0, 0, 0.35); }
+
+#stage-hud .hud-timer { position: absolute; display: flex; flex-direction: column; align-items: flex-end; }
+#stage-hud .hud-timer > * + * { margin-top: calc(var(--d) * 6); }
+#stage-hud .hud-timer .panel { background: var(--paper); color: var(--ink); font-weight: 600; line-height: 1.21; }
+#stage-hud .hud-timer .pos { font-size: calc(var(--uf) * 19); font-weight: 600; }
+#stage-hud .hud-timer .ghost { display: flex; align-items: center; }
+#stage-hud .hud-timer .ghost .label { font-size: calc(var(--uf) * 15); margin-right: calc(var(--d) * 8); }
+#stage-hud .hud-timer .ghost .panel { font-size: calc(var(--uf) * 19); padding: calc(var(--d) * 2) calc(var(--d) * 10); }
+#stage-hud .hud-timer .pop { font-size: calc(var(--df) * 24); font-weight: 600; color: var(--ue-accent); }
+#stage-hud .hud-timer .pens, #stage-hud .hud-timer .best { font-size: calc(var(--df) * 16); }
+
+#stage-hud .hud-progress { position: absolute; left: calc(var(--d) * 40); top: 50%; width: calc(var(--d) * 36); height: calc(var(--d) * 420);
+  transform: translateY(-50%); }
+#stage-hud .hud-progress > div { position: absolute; left: 50%; transform: translateX(-50%); }
+#stage-hud .hud-progress .track { top: calc(var(--d) * 8); bottom: calc(var(--d) * 8); width: calc(var(--d) * 4); background: rgba(255, 255, 255, 0.85); }
+#stage-hud .hud-progress .shadow { top: calc(var(--d) * 9); bottom: calc(var(--d) * 7); width: calc(var(--d) * 4); margin-left: calc(var(--d) * 1);
+  background: rgba(0, 0, 0, 0.25); }
+#stage-hud .hud-progress .tick { width: calc(var(--d) * 18); height: calc(var(--d) * 4); background: rgba(255, 255, 255, 0.9); }
+#stage-hud .hud-progress .tick.top { top: calc(var(--d) * 6); }
+#stage-hud .hud-progress .tick.bottom { bottom: calc(var(--d) * 6); }
+#stage-hud .hud-progress .fill { bottom: calc(var(--d) * 8); width: calc(var(--d) * 4); background: var(--ue-ink); }
+#stage-hud .hud-progress .mark { width: calc(var(--d) * 10); height: calc(var(--d) * 10); background: var(--ue-accent);
+  border: calc(var(--d) * 3) solid #fff; transform: translate(-50%, 50%); }
+
+#stage-hud .hud-lights { position: absolute; display: grid; background: var(--plate); }
+#stage-hud .hud-lights .light { position: relative; display: flex; align-items: center; justify-content: center; background: var(--lens); }
+#stage-hud .hud-lights .icon { mask-size: 100% 100%; -webkit-mask-size: 100% 100%; mask-repeat: no-repeat; -webkit-mask-repeat: no-repeat; }
+
+#stage-hud .hud-gear { position: absolute; left: 50%; transform: translateX(-50%); background: var(--paper);
+  border-radius: calc(var(--u) * 6); box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18); }
+#stage-hud .hud-gear svg, #stage-hud .dial svg { display: block; overflow: visible; }
+#stage-hud svg text { font-family: Inter, system-ui, sans-serif; text-anchor: middle; dominant-baseline: central; font-variant-numeric: tabular-nums; }
+#stage-hud svg .label, #stage-hud svg .dial-num { font-weight: 600; }
+
+#stage-hud .hud-speed { position: absolute; display: flex; align-items: flex-end; }
+#stage-hud .hud-speed .number { display: flex; align-items: flex-end; }
+#stage-hud .hud-speed .number .big { font-weight: 600; line-height: 1.21; }
+
+#stage-hud .hud-card { position: absolute; left: 50%; top: calc(var(--d) * 110); transform: translateX(-50%); text-align: center;
+  background: rgba(255, 255, 255, 0.78); color: var(--ue-ink); padding: calc(var(--d) * 16) calc(var(--d) * 40); white-space: nowrap; }
+#stage-hud .hud-card .name { font-size: calc(var(--df) * 34); font-weight: 600; }
+#stage-hud .hud-card .sub { font-size: calc(var(--df) * 18); margin-top: calc(var(--d) * 4); }
+#stage-hud .hud-count { position: absolute; left: 50%; top: 50%; transform: translate(-50%, calc(-50% - var(--d) * 60));
+  font-size: calc(var(--df) * 120); font-weight: 600; line-height: 1; text-shadow: calc(var(--d) * 3) calc(var(--d) * 3) 0 rgba(0, 0, 0, 0.35); }
+#stage-hud .hud-results { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.18); display: flex; align-items: center; justify-content: center; }
+#stage-hud .hud-results .panel { background: rgba(250, 249, 243, 0.9); color: var(--ue-ink); padding: calc(var(--d) * 36) calc(var(--d) * 44); }
+#stage-hud .hud-results .sub { font-size: calc(var(--df) * 18); color: rgba(39, 39, 43, 0.6); padding-left: calc(var(--d) * 20); }
+#stage-hud .hud-results .title { font-size: calc(var(--df) * 40); font-weight: 600; padding: 0 0 calc(var(--d) * 4) calc(var(--d) * 20); }
+#stage-hud .hud-results .title.dnf { color: var(--ue-accent); }
+#stage-hud .hud-results .line { font-size: calc(var(--df) * 20); padding-left: calc(var(--d) * 20); margin-bottom: calc(var(--d) * 14); }
+#stage-hud .hud-results .item { font-size: calc(var(--df) * 26); padding: calc(var(--d) * 6) calc(var(--d) * 17); min-width: calc(var(--d) * 420);
+  display: flex; justify-content: space-between; align-items: baseline; }
+#stage-hud .hud-results .item.sel { background: #26262b; color: #fff; }
+#stage-hud .hud-results .key { font-size: calc(var(--df) * 15); opacity: 0.6; }
 #stage-hud .hud-dip { position: absolute; inset: 0; background: #fff; opacity: 0; }
+/* a results panel hides the driving instruments, as in the original */
+#stage-hud.panel-open .hud-timer, #stage-hud.panel-open .hud-lights, #stage-hud.panel-open .hud-gear, #stage-hud.panel-open .hud-speed,
+#stage-hud.panel-open .hud-progress { visibility: hidden; }
+body.no-debug #frame-hud { display: none; }
 body.no-hud #frame-hud, body.no-hud #stage-hud { display: none; }

@@ -12,6 +12,7 @@ import { Pool, chipGeometry, icosphere, sparkGeometry } from './pool';
 import { SkidMarks } from './skids';
 import { CarFx } from './carFx';
 import { Exhaust } from './exhaust';
+import { DamageFx, type DamageState } from './damageFx';
 import { dustMaterial, fxU, glowMaterial, skidMaterial, solidMaterial } from './materials';
 
 export interface FxCar {
@@ -34,6 +35,9 @@ export class Fx {
   readonly skids: SkidMarks;
   readonly car: CarFx;
   readonly exhaust: Exhaust;
+  /** Smoke and fire from a damaged engine (src/fx/damageFx.ts); fed by `damageState`. */
+  readonly damage: DamageFx;
+  damageState: DamageState | null = null;
   enabled = true;
   quality: FxQuality = FX_QUALITY.high;
   /** Dust light = (sun × sunK + sky × skyK) / π: the original lit its dust without direction (see materials.ts);
@@ -75,6 +79,7 @@ export class Fx {
     this.car = new CarFx(cfg, { dust: this.pools.dust, chip: this.pools.chip, spark: this.pools.spark }, this.skids, rng, car.wheel_width_cm / 100);
     this.exhaust = new Exhaust(cfg, car.id, car.exhaust_pos_cm, car.length_cm / 100, this.pools.flame, this.pools.spark, rng);
     this.exhaust.visible = this.enabled;
+    this.damage = new DamageFx(cfg, car.id, car.length_cm, this.pools.dust, this.pools.flame, rng);
     this.offs.push(
       events.on('landing', (e) => {
         if (this.enabled && this.veh) this.car.landing(this.veh, e.strength, e.surface);
@@ -97,7 +102,7 @@ export class Fx {
     if (name === this.qualityName) return;
     this.qualityName = name;
     const q = (this.quality = FX_QUALITY[name] ?? FX_QUALITY.high);
-    this.car.scale = q.emission;
+    this.car.scale = this.damage.scale = q.emission;
     const cheap = name === 'low';
     const old = new Set([this.pools.chip.mesh.material, this.pools.dust.mesh.material, this.skids.mesh.material]);
     const solid = solidMaterial(cheap);
@@ -125,6 +130,7 @@ export class Fx {
     this.exhaust.update(veh, dt, pos, rot);
     if (!this.enabled) return;
     this.car.update(veh, dt, this.time, veh.input.handbrake);
+    if (this.damageState) this.damage.update(dt, this.damageState, pos, rot, veh.velocity);
     for (const p of Object.values(this.pools)) p.update(dt);
     this.skids.update();
   }
@@ -141,7 +147,7 @@ export class Fx {
     return {
       ...Object.fromEntries(Object.entries(this.pools).map(([k, p]) => [k, p.alive])),
       dustSpawned: this.pools.dust.spawned, chipSpawned: this.pools.chip.spawned,
-      skids: this.skids.placed, pops: this.exhaust.pops, antilag: this.exhaust.antilagPops, limiterPops: this.exhaust.limiterPops,
+      skids: this.skids.placed, smoke: this.damage.smokeEmitted, fire: this.damage.fireEmitted, pops: this.exhaust.pops, antilag: this.exhaust.antilagPops, limiterPops: this.exhaust.limiterPops,
     };
   }
 }

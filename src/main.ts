@@ -8,7 +8,8 @@ import { loadCarModel } from './car/carModel';
 import { ChaseCamera } from './camera/chaseCamera';
 import { Controls } from './input/controls';
 import { FrameHud } from './hud/frameHud';
-import { StageHud } from './hud/stageHud';
+import { StageHud, type HudInfo, type HudJson } from './hud/stageHud';
+import { loadHudSettings, saveHudSettings, type HudSettings } from './settings';
 import { posM } from './ue';
 import { createWorld, initPhysics } from './sim/physics';
 import { buildTestTrackPhysics } from './sim/testTrackPhysics';
@@ -30,6 +31,10 @@ import { CarEvents } from './game/carEvents';
 import { Crowd, type CrowdRuntime } from './world/crowd';
 import { Breakables, type BreakablesJson } from './world/breakables';
 import { events as fxEvents } from './game/events';
+// damage (slice 6c)
+import { Damage, type DamageJson, type Hit } from './game/damage';
+import { BodyContacts } from './game/contacts';
+import { mainSurface } from './game/carEvents';
 
 const params = new URLSearchParams(location.search);
 /** Headless runs: ?timescale=4 runs the game (physics, flow, camera) four times faster than the clock. */
@@ -65,6 +70,13 @@ interface Level {
   /** Last updateInstances cost (ms) and the visible instance count, for the perf readout. */
   instMs?: number;
   visible?(): number;
+  /** Called when the stage restarts (Enter): repair the car. */
+  onRestart?(): void;
+  /** What the HUD shows of the damage (null = off), and the condition for the intro card. */
+  damageView?(): HudInfo['damage'];
+  condition?(): string;
+  /** The stage HUD (stages only). */
+  hud?: StageHud;
 }
 
 async function main() {
@@ -95,8 +107,10 @@ async function main() {
   await renderer.init();
   app.appendChild(renderer.domElement);
   const backend = (renderer.backend as { isWebGPUBackend?: boolean }).isWebGPUBackend ? 'webgpu' : 'webgl2';
-  // ?hud=0 hides every overlay (look comparisons)
+  // ?hud=0 hides every overlay (look comparisons); ?hud=80..130 is the HUD size (src/settings.ts)
   if (params.get('hud') === '0') document.body.classList.add('no-hud');
+  const hudSettings = loadHudSettings(params);
+  document.body.classList.toggle('no-debug', !hudSettings.debug);
 
   const carId = params.get('car') ?? 'swift';
   const stageId = params.get('stage') ?? 'finland';
@@ -126,7 +140,7 @@ async function main() {
       info: () => 'test bench',
     };
   } else {
-    level = await buildStageLevel(stageId, reverse, rapier, world, scene, () => vehicle, () => sim, hudRoot);
+    level = await buildStageLevel(stageId, reverse, rapier, world, scene, () => vehicle, () => sim, hudRoot, hudSettings);
   }
 
   const model = await loadCarModel(car);
@@ -221,15 +235,58 @@ async function main() {
   level.frame = (dt, cameraPos) => {
     levelFrame?.(dt, cameraPos);
     fx.update(dt, vehicle, sim.renderPos, sim.renderRot, look);
-    const run = (level as { run?: { phase: string } }).run;
+    const run = (level as { run?: { phase: string; dnf: boolean } }).run;
+    // a retired run coasts like a finish but gets no applause (the original's NotifyFinish skips a DNF)
+    const crowdPhase = run?.dnf && run.phase === 'finished' ? 'retired' : run?.phase ?? 'running';
     crowd?.update(dt, { position: vehicle.position, kmh: vehicle.speedKmh, airborne: vehicle.wheelsInContact === 0 },
-      run?.phase ?? 'running', cameraPos, stageLevel?.drawDistance ?? 2);
+      crowdPhase, cameraPos, stageLevel?.drawDistance ?? 2);
     breakables?.update(dt, vehicle, run?.phase ?? 'running');
   };
   fx.warmup();
   crowd?.warmup();
   (window as unknown as { __fx: object }).__fx = { fx, crowd, breakables, carEvents, events: fxEvents };
   // --- /fx ---
+  // --- damage ---
+  // src/game/damage.ts: the body's contact impulses (src/game/contacts.ts, read before every physics step) make
+  // hits; damage costs torque and pulls the steering, dirties the paint, smokes and burns (src/fx/damageFx.ts),
+  // and terminal damage retires the run. ?damage=0|0.5|1 = the level (0 off, as in time attack; default 1).
+  const damageCfg = await load<DamageJson>('damage.json');
+  const damageLevel = params.has('damage') ? Math.min(Math.max(Number(params.get('damage')) || 0, 0), 1) : 1;
+  const damage = new Damage(damageCfg, {
+    lengthCm: car.length_cm, widthCm: car.width_cm,
+    engineXCm: fxCfg.cars[carId]?.engine_pos_cm?.[0] ?? car.length_cm * 0.32,
+  });
+  damage.enabled = damageLevel > 0;
+  damage.level = damageLevel;
+  const contacts = new BodyContacts(world, vehicle, damageCfg.ground_normal_z);
+  const hits: Hit[] = [];
+  const LOOSE = new Set(['gravel', 'dirt', 'grass', 'snow']);
+  damage.onTerminal = () => (level as { run?: { retire(r: string): void } }).run?.retire('terminal damage');
+  const damageStep = level.step?.bind(level);
+  level.step = (dt, input) => {
+    const out = damageStep ? damageStep(dt, input) : input;
+    for (const h of contacts.read(hits)) damage.hit(h);
+    damage.tick(dt, vehicle.speedKmh, LOOSE.has(mainSurface(vehicle)));
+    // exactly 1 and 0 while undamaged (and always with ?damage=0): the sim is untouched
+    vehicle.damageTorqueScale = damage.torqueScale;
+    vehicle.damageSteerPull = damage.steerPull;
+    return out;
+  };
+  // development: ?startdamage=0.8 starts the first run that damaged (smoke from 0.35, fire from 0.7; checks and perf)
+  if (params.has('startdamage')) damage.add(Math.min(Math.max(Number(params.get('startdamage')) || 0, 0), 0.99));
+  level.onRestart = () => damage.repair();
+  level.damageView = () => (damage.enabled ? { parts: damage.parts, terminal: damage.terminal } : null);
+  fx.damageState = {
+    get value() {
+      return damage.value;
+    },
+    get terminal() {
+      return damage.terminal;
+    },
+    smokeFrom: damageCfg.smoke_from,
+    fireFrom: damageCfg.fire_from,
+  };
+  // --- /damage ---
   // place the camera, then build every pipeline now rather than mid-run (the loading curtain will cover this)
   chase.update(0, { position: sim.renderPos, forward: new THREE.Vector3(1, 0, 0).applyQuaternion(sim.renderRot), velocity: vehicle.velocity });
   look.update(0, sim.renderPos, innerWidth, innerHeight);
@@ -240,17 +297,36 @@ async function main() {
   if (stageOf) stageOf.timings.warmup = performance.now() - t0;
   const controls = new Controls();
   const hud = new FrameHud(document.body, backend);
+  level.condition = () => look.cond?.name ?? '';
+  // HUD keys: U km/h or mph, I number or dial, F3 the debug panel (saved: src/settings.ts)
+  const setHud = (change: Partial<HudSettings>) => {
+    const now = { ...(level.hud?.settings ?? hudSettings), ...change };
+    Object.assign(hudSettings, now);
+    level.hud?.apply(now);
+    document.body.classList.toggle('no-debug', !now.debug);
+    saveHudSettings({ ...loadHudSettings(), ...change });
+  };
+  addEventListener('keydown', (e) => {
+    if (e.repeat) return;
+    if (e.code === 'KeyU') setHud({ units: hudSettings.units === 'mph' ? 'kmh' : 'mph' });
+    if (e.code === 'KeyI') setHud({ speedo: hudSettings.speedo === 'dial' ? 'number' : 'dial' });
+    if (e.code === 'F3') {
+      e.preventDefault();
+      setHud({ debug: !hudSettings.debug });
+    }
+  });
 
   const onResize = () => {
     renderer.setSize(innerWidth, innerHeight);
     chase.camera.aspect = innerWidth / innerHeight;
     chase.camera.updateProjectionMatrix();
+    level.hud?.resize();
   };
   addEventListener('resize', onResize);
   onResize(); // the window may have changed while the stage loaded (going fullscreen, for one)
 
   // read-only handle for tools/check (headless runs)
-  (window as unknown as { __br: object }).__br = { vehicle, chase, model, sim, level, renderer, perf, backend, carId, look, gpu, auto };
+  (window as unknown as { __br: object }).__br = { vehicle, chase, model, sim, level, renderer, perf, backend, carId, look, gpu, auto, damage, contacts };
 
   // --- audio ---
   // sound (src/audio): engine, tyres, world, music. It reads the game every frame and never writes to it.
@@ -281,6 +357,7 @@ async function main() {
     model.root.position.copy(sim.renderPos);
     model.root.quaternion.copy(sim.renderRot);
     model.pose((vehicle.wheelAngleDeg * Math.PI) / 180, vehicle.wheels);
+    model.setGrime(damage.grime, damageCfg.dirt_color);
 
     camState.forward.set(1, 0, 0).applyQuaternion(sim.renderRot);
     chase.update(dt, camState);
@@ -290,9 +367,11 @@ async function main() {
     const gear = vehicle.gear < 0 ? 'r' : String(vehicle.gear);
     hud.extra = `${car.name} · ${level.info()} · ${Math.abs(vehicle.forwardSpeedKmh).toFixed(0)} km/h · gear ${gear}` +
       ` · traction assist ${vehicle.tractionAssist ? 'on' : 'off'} · camera ${chase.presetName} · ${controls.device}` +
+      ` · damage ${damage.enabled ? `${(damage.value * 100).toFixed(0)}%${damage.terminal ? ' (wrecked)' : ''}` : 'off'}` +
       `\n${look.cond.name} · post ${look.post.enabled ? 'on' : 'off'} · quality ${look.qualityName}` +
       `${look.scale < 1 ? ` ${Math.round(look.scale * 100)}%` : ''}${auto ? ' (auto)' : ''}` +
-      `\nw s a d drive · space handbrake · r recover · t traction assist · c camera · l livery · enter restart · k time of day · p post`;
+      `\nw s a d drive · space handbrake · r recover · t traction assist · c camera · l livery · enter restart · k time of day · p post` +
+      ` · u km/h or mph · i speed dial · f3 this panel`;
     const r0 = performance.now();
     look.render();
     const info = renderer.info.render as unknown as { drawCalls: number; triangles: number };
@@ -313,10 +392,11 @@ async function main() {
 }
 
 async function buildStageLevel(id: string, reverse: boolean, rapier: typeof RAPIER, world: RAPIER.World, scene: THREE.Scene,
-  getVehicle: () => Vehicle, getSim: () => Simulation, hudRoot: HTMLElement): Promise<Level> {
-  const [catalog, runtime] = await Promise.all([
+  getVehicle: () => Vehicle, getSim: () => Simulation, hudRoot: HTMLElement, hudSettings: HudSettings): Promise<Level> {
+  const [catalog, runtime, hudJson] = await Promise.all([
     load<Record<string, CatalogEntry>>('env_catalog.json'),
     load<StageRuntimeJson & { flow: FlowConfig }>('stage_runtime.json'),
+    load<HudJson>('hud.json'),
   ]);
   const stage = await Stage.load(id, catalog, runtime, rapier, world);
   // draw distance: ?draw=near|medium|far|max or a multiplier (default far, x2)
@@ -335,11 +415,12 @@ async function buildStageLevel(id: string, reverse: boolean, rapier: typeof RAPI
     carStartBack: runtime.car_start_back_m,
   };
   const tracker = new RoadTracker(stage.road, v.start_s, v.finish_s, rules);
+  const lengthKm = Math.abs(v.finish_s - v.start_s) / 1000;
   stage.addGantries(v.start_s, v.finish_s, tracker.sign, rapier, world);
   stage.updateInstances(tracker.startPose().position, true);
   const flow = { ...DEFAULT_FLOW, ...runtime.flow };
   let run = new StageRun(tracker, flow);
-  const hud = new StageHud(hudRoot);
+  const hud = new StageHud(hudRoot, hudJson, hudSettings);
   const bounds = stage.json.bounds;
   let restartKey = false;
   addEventListener('keydown', (e) => {
@@ -357,6 +438,7 @@ async function buildStageLevel(id: string, reverse: boolean, rapier: typeof RAPI
     get run() {
       return run;
     },
+    hud,
     surfaceAt: stage.surfaceAt,
     spawn: () => tracker.startPose(),
     attach(arcade, rs) {
@@ -392,16 +474,22 @@ async function buildStageLevel(id: string, reverse: boolean, rapier: typeof RAPI
         tracker.reset();
         run = new StageRun(tracker, flow, true);
         respawn();
+        level.onRestart?.();
       }
       const t0 = performance.now();
       stage.updateInstances(camera, false, veh.position);
       level.instMs = performance.now() - t0;
+      const cond = level.condition?.() ?? '';
+      // the original's display gear: a car rolling forward through a shift shows the gear it left
+      const gear = veh.gear === 0 && veh.forwardSpeed > 1 ? veh.lastDriveGear : veh.gear;
       hud.update(run, {
         stageName: stage.json.name,
-        direction: `${stage.json.location} · ${reverse ? 'reverse' : 'forward'}`,
-        kmh: veh.forwardSpeedKmh,
-        gear: veh.gear,
+        subtitle: [stage.json.location.toLowerCase(), `${lengthKm.toFixed(1)} km`, reverse ? 'reverse' : 'forward', cond].filter(Boolean).join(' · '),
+        kmh: Math.abs(veh.forwardSpeedKmh),
+        gear,
+        gears: veh.t.gearRatios.length,
         progress: tracker.progress,
+        damage: level.damageView ? level.damageView() : null,
       });
     },
     info: () => `${id} s=${tracker.proj?.s.toFixed(0) ?? '-'} · ${stage.stats.visible} inst${ap ? ' · autopilot' : ''}`,

@@ -1,6 +1,9 @@
 // One run of a stage (handoff §11.1, stage_runtime.json flow): intro card, 3-2-1 countdown (a
 // jump start is allowed, the clock starts on "go"), running, a short coast after the finish line,
 // results. Off-road resets and recovers cost +5 s each. No splits, by design.
+// A run that can't finish (terminal damage, lost outside the stage, the time cap) retires the way the
+// original's DeclareDNF does: the car coasts to a stop like after the finish, then the results say
+// "dnf · <reason>".
 import type { DriverInput } from '../sim/vehicle';
 import type { RoadTracker } from '../sim/road';
 import { events } from './events';
@@ -33,6 +36,8 @@ export class StageRun {
   penalties = 0;
   recovers = 0;
   dnf = false;
+  /** Why the run did not finish ('terminal damage', 'left the stage', 'time cap'), '' if it didn't retire. */
+  dnfReason = '';
   /** Seconds since the last penalty (for the HUD pop), Infinity if none. */
   sincePenalty = Infinity;
   private lostTime = 0;
@@ -52,6 +57,14 @@ export class StageRun {
     if (this.phase === 'countdown') return String(3 - Math.floor(this.t / this.flow.countdown_step_s));
     if (this.phase === 'running' && this.clock < this.flow.go_display_s) return 'go';
     return null;
+  }
+
+  /** End the run without a finish (the original's DeclareDNF): coast to a stop, then the results. */
+  retire(reason: string): void {
+    if (this.phase === 'results' || this.dnf) return;
+    this.dnf = true;
+    this.dnfReason = reason;
+    this.enter('finished');
   }
 
   penalty(): void {
@@ -79,9 +92,10 @@ export class StageRun {
       case 'running':
         this.clock += dt;
         this.lostTime = outsideBounds ? this.lostTime + dt : 0;
-        if (this.lostTime > f.lost_dnf_s || this.clock + this.penalties >= f.time_cap_s) {
-          this.dnf = true;
-          this.enter('results');
+        if (this.clock + this.penalties >= f.time_cap_s) {
+          this.retire('time cap');
+        } else if (this.lostTime > f.lost_dnf_s) {
+          this.retire('left the stage');
         } else if (this.tracker.crossedFinish) {
           this.enter('finished');
         }
@@ -100,7 +114,7 @@ export class StageRun {
     this.t = 0;
     // the flow's sound cues (audio listens; nothing here feeds back into the run)
     if (p === 'running') events.emit('go', {});
-    if (p === 'finished' || (p === 'results' && this.dnf)) events.emit('finish', { dnf: this.dnf, time: this.total });
+    if (p === 'finished') events.emit('finish', { dnf: this.dnf, time: this.total, reason: this.dnfReason });
   }
 }
 
