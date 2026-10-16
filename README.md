@@ -52,9 +52,12 @@ URL options:
 | `?stage=test` | the flat handling test bench instead of a stage |
 | `?draw=near\|medium\|far\|max` | draw distance (×1, 1.5, 2, 3 the base fade bands; default far) |
 | `?cond=morning\|afternoon\|sunset\|night\|fog` | time of day (default afternoon); `?cond=stage` uses the stage's own choice (finland: sunset forward, afternoon in reverse) |
-| `?quality=auto\|high\|medium\|low` | rendering quality (default auto: high up to about 2560×1440, medium above) |
+| `?quality=auto\|high\|medium\|low` | rendering quality (default auto: measures frame times and settles on what holds 60 fps; see Performance) |
+| `?scale=0.5..1` | render scale: the canvas is drawn smaller and stretched to the window (pins it, also under auto) |
+| `?upscale=fsr` | with a render scale below 1, upscale with FSR 1 in the post chain instead (sharper, costs more) |
 | `?post=0` | no post-processing: the scene straight to the screen at the same exposure (P toggles) |
-| `?ao=0`, `?dof=0`, `?bloom=0`, `?msaa=0`, `?cascades=1`, `?hlshadow=0` | switch single effects off or down, on top of the quality preset |
+| `?ao=0`, `?dof=0`, `?bloom=0`, `?msaa=0`, `?cascades=1`, `?hlshadow=0`, `?shadowmap=1024`, `?shadowfar=100` | switch single effects off or down, on top of the quality preset |
+| `?hide=tree,grass`, `?lodcuts=50,120,200`, `?lodblend=0.1`, `?shadowrange=180`, `?lookoff=fog,mask,lit` | development: hide instance categories, move the vegetation detail switches, turn shader features off (for measuring their cost) |
 | `?hud=0` | hide every overlay (screenshots) |
 | `?gputime` | measure GPU time per frame with timer queries (for the check scripts) |
 | `?webgl` | force the WebGL2 renderer instead of WebGPU |
@@ -82,9 +85,40 @@ time of day from `public/data/conditions.json`:
 
 | Quality | Shadows | AO | DOF | Bloom | Anti-aliasing |
 |---|---|---|---|---|---|
-| high | 3 cascades | half res, 16 samples | 16 taps | on | MSAA 4× (WebGPU: FXAA) |
-| medium | 2 cascades (1 at night) | half res, 8 samples | 12 taps | on | FXAA |
-| low | 1 cascade | off | off | off | FXAA |
+### Performance
+
+The quality tiers (`src/look/quality.ts`):
+
+| Quality | Shadows | AO | DOF | Bloom | Anti-aliasing | Fog | Vegetation |
+|---|---|---|---|---|---|---|---|
+| high | 3 cascades, 2048 | half res, 16 samples | 16 taps | on | MSAA 4× (WebGPU: FXAA) | per vertex | full detail to 110 m |
+| medium | 2 cascades (1 at night), 2048 | half res, 8 samples | 12 taps | on | FXAA | per vertex | full detail to 70 m |
+| low | 1 cascade to 130 m, 1536 | off | 8 taps | off | FXAA | per pixel, in the post chain | full detail to 50 m, diffuse-only foliage, ground cover to 0.75× the draw distance |
+
+- **Vegetation detail.** Trees and shrubs have four levels, built at load time from the
+  mesh itself (`src/world/lod.ts`): their foliage is made of single-triangle chips, and
+  each lower level keeps an evenly spread 35%, 10% and 2.5% of them, each scaled up so the
+  canopy covers the same area. Levels switch by distance with a short dithered
+  cross-fade, never a pop. On the two far levels the trunk joins the foliage in one draw.
+- **Shadows** come from separate shadow-only copies of the vegetation on layer 1, which
+  only the shadow cameras see: full or reduced detail near the car, the coarser levels
+  further out, and nothing beyond the shadow range. Tall grass stops casting below high.
+- **Dithering costs.** A shader that can discard loses the GPU's early depth test, so
+  trees that are fully faded in and away from the car's see-through zone draw with a
+  twin material that never discards.
+- **Auto quality** (`src/look/autoQuality.ts`, the default) starts from a guess by GPU
+  and screen size (a discrete GPU: high, or medium above about 2560×1440; an integrated
+  one: low, at 70% render scale on a big screen) and then walks a ladder: high, medium,
+  low, then low at 85%, 70% and 55% render scale. While settling (the first ten seconds)
+  it steps down as soon as a third of a 1.5 s window went to frames slower than 20 ms;
+  later it needs two bad 3 s windows in a row. It steps up only with the GPU timer showing
+  plenty of headroom for 20 s, and never back into a rung that failed. The HUD shows the
+  tier, the scale and `(auto)`. `?quality=<tier>` pins it.
+- **Render scale** draws a smaller canvas and lets the browser stretch it: free, where an
+  upscale pass at full resolution cost several milliseconds on an integrated GPU.
+- **The fast GPU.** The renderer asks for `powerPreference: 'high-performance'` (WebGPU
+  adapter and WebGL2 context). Browsers may ignore it: desktop Chrome on Linux draws
+  with the GPU it runs on, which on a hybrid laptop is the integrated one.
 
 ### Handling tests
 
@@ -137,3 +171,11 @@ screenshot WebGPU.
   under the wheels. `--perf --size 3840x1600 --seconds 60` runs at real time
   and prints frame times, draw calls, visible instances and the cost of the
   instance update.
+- `node tools/check/perf.mjs [--gpu igpu|dgpu] [--sizes 1920x1080,3840x1600] [--seconds 45] [--configs "quality=auto;quality=low"]`
+  drives the stage with the autopilot at real time and prints, per configuration,
+  the renderer string, the tier auto chose, frame times (mean, p99, max, frames over
+  25 ms), GPU timer and CPU costs. `--gpu dgpu` sets the NVIDIA offload variables on a
+  hybrid laptop; `--spots 759,1500` parks the car at fixed road positions instead
+  (same views for every config); `--uncapped` turns vsync off, which gives the true
+  GPU-bound cost for comparing configs; `--headed` measures in a normal fullscreen
+  browser window on the desktop (fullscreen uses Hyprland's dispatcher).

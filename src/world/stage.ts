@@ -11,6 +11,7 @@ import { Road, type RoadData } from '../sim/road';
 import type { SurfaceQuery } from '../sim/vehicle';
 import type { Surface } from '../sim/tuning';
 import { instanceMaterials, propMaterials, terrainMaterials } from '../look/materials';
+import { fadeBand, mergeParts, vegetationLods } from './lod';
 
 export interface StageJson {
   id: string;
@@ -93,6 +94,16 @@ function splitColour(g: THREE.BufferGeometry): void {
   g.setAttribute('sway', new THREE.BufferAttribute(sway, 1));
 }
 
+/** One mesh (one level of detail) of a chunk: a mesh per material slot, sharing the instance attributes. */
+interface Level {
+  parts: THREE.Mesh<THREE.InstancedBufferGeometry>[];
+  a: THREE.InstancedBufferAttribute; // x, y, z, scale
+  b: THREE.InstancedBufferAttribute; // rotY, fade band (see fadeBand), hue shift (deg), value delta
+  k: number; // instances written this update
+  /** The same level with materials that never discard (no fade, not near the car): early depth test. */
+  solid: Level | null;
+}
+
 interface InstanceGroup {
   mesh: string;
   category: string;
@@ -100,10 +111,46 @@ interface InstanceGroup {
   end: number;
   sphere: THREE.Sphere; // bounds of every instance in the chunk: per-camera culling and the range test
   ids: Uint32Array; // instance ids in the stage's instance table
-  parts: THREE.Mesh<THREE.InstancedBufferGeometry>[]; // one per material slot, sharing the instance attributes
-  a: THREE.InstancedBufferAttribute; // x, y, z, scale
-  b: THREE.InstancedBufferAttribute; // rotY, fade, hue shift (deg), value delta
+  /** Drawn levels: [full] or, for vegetation, [full, mid, far] (cross-faded by distance, see `lod`). */
+  levels: Level[];
+  /** Vegetation only: the same levels on layer 1, which only shadow cameras see (cheap casters). */
+  shadow: Level[];
+  /** Every level, solid twins and shadow levels included (uploads, visibility, warm-up). */
+  all: Level[];
+  /** Reach of the mesh from its pivot at scale 1 (m): the occluder test. */
+  reach: number;
 }
+
+/**
+ * Level of detail and shadow casters for vegetation (trees and shrubs), set by the quality tier.
+ * Distances are from the camera in metres and don't scale with the draw distance.
+ */
+export interface LodSettings {
+  /** Where levels 1, 2 and 3 take over; each switch dithers over the last `blend` share of the distance. */
+  cuts: number[];
+  blend: number;
+  /** Shadow casters: the level used within `shadowCut` and beyond it, up to `shadowRange` (0 = none). */
+  shadowNear: number;
+  shadowFar: number;
+  shadowCut: number;
+  shadowRange: number;
+  /** Whether grass that the catalog lets cast shadows (tall grass) does: thousands of small casters. */
+  grassShadows: boolean;
+  /** Ground cover (grass, flowers, ferns) draw distance, relative to the stage's draw distance. */
+  groundDraw: number;
+  /** Diffuse-only foliage (materials.ts lambertCopy). */
+  cheapFoliage: boolean;
+}
+
+export const DEFAULT_LOD: LodSettings = { cuts: [90, 200, 300], blend: 0.2, shadowNear: 0, shadowFar: 1, shadowCut: 80, shadowRange: 240, grassShadows: true,
+  groundDraw: 1, cheapFoliage: false };
+const GROUND_COVER = new Set(['grass', 'flower', 'fern']);
+/** Levels from this one on use the far foliage material (no sway, no see-through test): beyond 90 m. */
+const FAR_LEVEL = 2;
+
+/** Categories that get levels of detail and shadow proxies (when they have a foliage slot). */
+const LOD_CATEGORIES = new Set(['tree', 'shrub']);
+
 
 export class Stage {
   readonly group = new THREE.Group();
@@ -118,7 +165,31 @@ export class Stage {
   private envGeoms = new Map<string, { geometry: THREE.BufferGeometry; slot: string }[]>();
   /** Draw distance multiplier (setting: near / medium / far / max = 1 / 1.5 / 2 / 3). */
   drawDistance = 2;
-  stats = { instances: 0, visible: 0, colliders: 0, groups: 0 };
+  /** Instance categories not drawn (dev: ?hide=tree,grass for measuring their cost). */
+  hidden = new Set<string>();
+  /** Radius (m) around the camera-to-car line inside which foliage may dither (materials.ts occluder). */
+  occluderReach = 8.5;
+  /** Vegetation levels of detail and shadow casters (the quality tier sets it with setLod). */
+  lod: LodSettings = { ...DEFAULT_LOD };
+
+  setLod(l: LodSettings): void {
+    this.lod = l;
+    for (const g of this.groups) {
+      for (const lv of g.all) {
+        for (const im of lv.parts) {
+          if (g.category === 'grass' && this.catalog[g.mesh]?.shadow && !im.layers.isEnabled(1)) im.castShadow = l.grassShadows;
+          // foliage slots swap between the physical and the diffuse-only material
+          const key = im.userData.mat as string | undefined;
+          if (key?.startsWith('Foliage')) {
+            const solid = key.endsWith('!'), base = key.replace('!', '');
+            im.material = this.mats[`${base}${l.cheapFoliage ? 'L' : ''}${solid ? '!' : ''}`] ?? im.material;
+          }
+        }
+      }
+    }
+    this.updateInstances(this.lastUpdate, true);
+  }
+  stats = { instances: 0, visible: 0, drawn: 0, colliders: 0, groups: 0 };
   /** Load and build costs (ms): fetch + decode, terrain meshes, Rapier colliders (tiles, instances), instances. */
   timings = { fetch: 0, terrain: 0, tileColliders: 0, instances: 0, instanceColliders: 0, warmup: 0 };
 
@@ -248,7 +319,10 @@ export class Stage {
     return [c[0] / 100, c[1] / 100];
   }
 
+  private mats: Record<string, THREE.Material> = {};
+
   private buildInstances(mats: Record<string, THREE.Material>, rapier: typeof RAPIER, world: RAPIER.World): void {
+    this.mats = mats;
     const F = this.json.bin.floats_per_instance;
     const bin = this.bin;
     const n = bin.length / F;
@@ -285,8 +359,11 @@ export class Stage {
         list.push(i);
       }
       const [start, end] = this.bandFor(cat.category);
+      // vegetation: three levels of detail and the same as shadow-only casters (lod.ts)
+      const lodded = LOD_CATEGORIES.has(cat.category) && parts.some((pt) => pt.slot === 'Foliage');
+      const levelParts = lodded ? this.lodParts(mesh, parts) : [parts];
       // reach of the mesh from its pivot (base centre)
-      const meshRadius = Math.max(...parts.map((pt) => (pt.geometry.boundingSphere?.center.length() ?? 0) + (pt.geometry.boundingSphere?.radius ?? 1)));
+      const meshRadius = Math.max(...levelParts.flat().map((pt) => (pt.geometry.boundingSphere?.center.length() ?? 0) + (pt.geometry.boundingSphere?.radius ?? 1)));
       for (const [key, ids] of chunks) {
         const box = new THREE.Box3();
         let maxScale = 0;
@@ -297,32 +374,45 @@ export class Stage {
         const sphere = box.getBoundingSphere(new THREE.Sphere());
         sphere.radius += meshRadius * maxScale;
         const cap = ids.length;
-        const a = new THREE.InstancedBufferAttribute(new Float32Array(cap * 4), 4);
-        a.setUsage(THREE.DynamicDrawUsage);
-        const b = new THREE.InstancedBufferAttribute(new Float32Array(cap * 4), 4);
-        b.setUsage(THREE.DynamicDrawUsage);
-        const meshes: THREE.Mesh<THREE.InstancedBufferGeometry>[] = [];
-        for (const part of parts) {
-          const g = new THREE.InstancedBufferGeometry();
-          g.index = part.geometry.index;
-          for (const [name, attr] of Object.entries(part.geometry.attributes)) g.setAttribute(name, attr);
-          g.setAttribute('inst_a', a);
-          g.setAttribute('inst_b', b);
-          g.instanceCount = 0;
-          // three culls the chunk per camera (main and shadow) with this sphere; the instances move
-          // inside it as they are compacted, so it is set once and never recomputed
-          g.boundingSphere = sphere;
-          const im = new THREE.Mesh(g, mats[part.slot] ?? mats.Flat);
-          im.visible = false;
-          im.castShadow = cat.shadow;
-          im.receiveShadow = true;
-          im.name = `${mesh}@${key}`;
-          meshes.push(im);
-          this.group.add(im);
-        }
+        const level = (lp: typeof parts, n: number, shadowOnly: boolean, solid = false): Level => {
+          const a = new THREE.InstancedBufferAttribute(new Float32Array(cap * 4), 4);
+          a.setUsage(THREE.DynamicDrawUsage);
+          const b = new THREE.InstancedBufferAttribute(new Float32Array(cap * 4), 4);
+          b.setUsage(THREE.DynamicDrawUsage);
+          const meshes = lp.map((part) => {
+            const g = new THREE.InstancedBufferGeometry();
+            g.index = part.geometry.index;
+            for (const [name, attr] of Object.entries(part.geometry.attributes)) g.setAttribute(name, attr);
+            g.setAttribute('inst_a', a);
+            g.setAttribute('inst_b', b);
+            g.instanceCount = 0;
+            // three culls the chunk per camera (main and shadow) with this sphere; the instances move
+            // inside it as they are compacted, so it is set once and never recomputed
+            g.boundingSphere = sphere;
+            const slot = part.slot === 'Foliage' && lodded && n >= FAR_LEVEL ? 'FoliageFar' : part.slot;
+            const matKey = mats[slot] ? `${slot}${solid ? '!' : ''}` : `Flat${solid ? '!' : ''}`;
+            const im = new THREE.Mesh(g, mats[matKey]);
+            im.userData.mat = matKey;
+            im.visible = false;
+            // vegetation casts through its shadow-only proxies (layer 1), never with the drawn levels
+            im.castShadow = shadowOnly || (cat.shadow && !lodded);
+            im.receiveShadow = !shadowOnly;
+            if (shadowOnly) im.layers.set(1);
+            im.name = `${mesh}@${key}${lodded ? (shadowOnly ? `:shadow${n}` : `:lod${n}`) : ''}${solid ? '!' : ''}`;
+            this.group.add(im);
+            return im;
+          });
+          // solid twins only where they pay: big alpha-tested canopies (grass is cheap to draw either way,
+          // and every twin is another draw call per chunk)
+          // (and only on the near levels: far trees are small on screen, their twins were just draw calls)
+          return { parts: meshes, a, b, k: 0, solid: shadowOnly || solid || !lodded || n >= FAR_LEVEL ? null : level(lp, n, false, true) };
+        };
+        const levels = levelParts.map((lp, n) => level(lp, n, false));
+        // shadow casters: trunk and foliage in one mesh per level (one draw per cascade instead of two)
+        const shadow = lodded && cat.shadow ? levelParts.map((lp, n) => level(this.mergedParts(mesh, n, lp), n, true)) : [];
         this.groups.push({
-          mesh, category: cat.category, start, end, sphere,
-          ids: Uint32Array.from(ids), parts: meshes, a, b,
+          mesh, category: cat.category, start, end, sphere, ids: Uint32Array.from(ids), levels, shadow,
+          all: [...levels.flatMap((l) => (l.solid ? [l, l.solid] : [l])), ...shadow], reach: meshRadius,
         });
       }
       // colliders for instances near the road (breakables come apart instead, in a later slice)
@@ -340,6 +430,28 @@ export class Stage {
       }
     }
     this.stats.groups = this.groups.length;
+  }
+
+  private lodCache = new Map<string, { geometry: THREE.BufferGeometry; slot: string }[][]>();
+  /** The levels of detail of an env mesh, built once (lod.ts). */
+  private lodParts(mesh: string, parts: { geometry: THREE.BufferGeometry; slot: string }[]) {
+    let l = this.lodCache.get(mesh);
+    if (!l) this.lodCache.set(mesh, (l = vegetationLods(parts)));
+    return l;
+  }
+
+  private mergedCache = new Map<string, { geometry: THREE.BufferGeometry; slot: string }[]>();
+  private mergedParts(mesh: string, n: number, parts: { geometry: THREE.BufferGeometry; slot: string }[]) {
+    const k = `${mesh}:${n}`;
+    let m = this.mergedCache.get(k);
+    if (!m) this.mergedCache.set(k, (m = mergeParts(parts)));
+    return m;
+  }
+
+  /** Triangles per level of an env mesh (for tools/check). */
+  lodTriangles(): Record<string, number[]> {
+    const tri = (g: THREE.BufferGeometry) => (g.index ? g.index.count : g.getAttribute('position').count) / 3;
+    return Object.fromEntries([...this.lodCache].map(([m, l]) => [m, l.map((parts) => parts.reduce((n, p) => n + tri(p.geometry), 0))]));
   }
 
   private addInstanceCollider(rapier: typeof RAPIER, world: RAPIER.World, cat: CatalogEntry,
@@ -386,26 +498,28 @@ export class Stage {
    */
   warmup(render: () => void): void {
     for (const g of this.groups) {
-      this.writeInstance(g, 0, g.ids[0], 1);
-      g.a.needsUpdate = g.b.needsUpdate = true;
-      for (const im of g.parts) {
-        im.geometry.instanceCount = 1;
-        im.visible = true;
-        im.frustumCulled = false;
+      for (const l of g.all) {
+        this.writeInstance(l, 0, g.ids[0], 1);
+        l.a.needsUpdate = l.b.needsUpdate = true;
+        for (const im of l.parts) {
+          im.geometry.instanceCount = 1;
+          im.visible = true;
+          im.frustumCulled = false;
+        }
       }
     }
     render();
     for (const g of this.groups) {
-      for (const im of g.parts) im.frustumCulled = true;
+      for (const l of g.all) for (const im of l.parts) im.frustumCulled = true;
     }
     this.updateInstances(this.lastUpdate, true);
   }
 
   // ---------------------------------------------------------------- per frame
-  private writeInstance(g: InstanceGroup, k: number, i: number, fade: number): void {
+  private writeInstance(l: Level, k: number, i: number, fade: number): void {
     const F = this.json.bin.floats_per_instance;
     const bin = this.bin;
-    const A = g.a.array as Float32Array, B = g.b.array as Float32Array;
+    const A = l.a.array as Float32Array, B = l.b.array as Float32Array;
     A[k * 4] = bin[i * F];
     A[k * 4 + 1] = bin[i * F + 1];
     A[k * 4 + 2] = bin[i * F + 2];
@@ -417,20 +531,33 @@ export class Stage {
   }
 
   private lastUpdate = new THREE.Vector3(1e9, 0, 0);
+  private lastCar = new THREE.Vector3(1e9, 0, 0);
 
-  /** Compact each chunk's visible instances by distance from the camera, with the fade over the band. */
-  updateInstances(camera: THREE.Vector3, force = false): void {
+  /**
+   * Compact each chunk's visible instances by distance from the camera, with the fade over the band.
+   * Instances fully in view and away from `car` (the see-through capsule from the camera to the car,
+   * materials.ts occluder) go to the solid twins, which never discard.
+   */
+  updateInstances(camera: THREE.Vector3, force = false, car?: THREE.Vector3): void {
     if (!force && camera.distanceToSquared(this.lastUpdate) < 0.25) return;
     this.lastUpdate.copy(camera);
+    if (car) this.lastCar.copy(car);
+    const cx = this.lastCar.x - camera.x, cy = this.lastCar.y + 0.8 - camera.y, cz = this.lastCar.z - camera.z;
+    const cl2 = Math.max(cx * cx + cy * cy + cz * cz, 1e-4);
     const F = this.json.bin.floats_per_instance;
     const bin = this.bin;
     const mul = this.drawDistance;
-    let visible = 0;
+    const lod = this.lod;
+    const cuts = lod.cuts, blend = lod.blend;
+    const shadowRange2 = lod.shadowRange * lod.shadowRange, shadowCut2 = lod.shadowCut * lod.shadowCut;
+    let visible = 0, drawn = 0;
     for (const g of this.groups) {
-      const start = g.start * mul, end = g.end * mul;
+      const m = GROUND_COVER.has(g.category) ? mul * lod.groundDraw : mul;
+      const start = g.start * m, end = g.end * m;
       const dc = g.sphere.distanceToPoint(camera);
-      let k = 0;
-      if (dc < end) {
+      for (const l of g.all) l.k = 0;
+      const L = g.levels;
+      if (dc < end && !this.hidden.has(g.category)) {
         const end2 = end * end;
         for (let j = 0; j < g.ids.length; j++) {
           const i = g.ids[j];
@@ -439,25 +566,52 @@ export class Stage {
           if (d2 >= end2) continue;
           const d = Math.sqrt(d2);
           const f = d <= start ? 1 : 1 - (d - start) / (end - start);
-          this.writeInstance(g, k, i, f);
-          k++;
-        }
-        if (k) {
-          // upload only the compacted front of each buffer
-          for (const [a, size] of [[g.a, 4], [g.b, 4]] as const) {
-            a.clearUpdateRanges();
-            a.addUpdateRange(0, k * size);
-            a.needsUpdate = true;
+          visible++;
+          // inside the capsule from the camera to the car (radius up to 8.3 m, plus the mesh's reach)?
+          const tc = Math.min(Math.max((dx * cx + dy * cy + dz * cz) / cl2, 0), 1);
+          const ex = dx - cx * tc, ey = dy - cy * tc, ez = dz - cz * tc, r = this.occluderReach + g.reach * bin[i * F + 4];
+          const near = r > 0 && ex * ex + ey * ey + ez * ez < r * r;
+          if (L.length === 1) {
+            const l = f >= 1 && !near && L[0].solid ? L[0].solid : L[0];
+            this.writeInstance(l, l.k++, i, f);
+          } else {
+            // level by distance; inside a switch's blend zone the two levels split the dither between them
+            let n = 0;
+            while (n < L.length - 1 && n < cuts.length && d >= cuts[n]) n++;
+            const hi = n < L.length - 1 && n < cuts.length ? cuts[n] : Infinity, lo = hi * (1 - blend);
+            if (d > lo && hi < Infinity) {
+              const t = Math.round(((d - lo) / (hi - lo)) * 1023) / 1023; // share of the next level
+              if (1 - t > 0) this.writeInstance(L[n], L[n].k++, i, fadeBand(0, Math.min(1 - t, f)));
+              if (f > 1 - t) this.writeInstance(L[n + 1], L[n + 1].k++, i, fadeBand(1 - t, f));
+            } else {
+              const l = (f >= 1 && !near && L[n].solid) || L[n];
+              this.writeInstance(l, l.k++, i, f);
+            }
+          }
+          if (g.shadow.length && d2 < shadowRange2) {
+            const s = g.shadow[d2 < shadowCut2 ? lod.shadowNear : lod.shadowFar];
+            this.writeInstance(s, s.k++, i, 1);
           }
         }
       }
-      for (const im of g.parts) {
-        im.geometry.instanceCount = k;
-        im.visible = k > 0;
+      for (const l of g.all) {
+        if (l.k) {
+          // upload only the compacted front of each buffer
+          for (const a of [l.a, l.b]) {
+            a.clearUpdateRanges();
+            a.addUpdateRange(0, l.k * 4);
+            a.needsUpdate = true;
+          }
+        }
+        for (const im of l.parts) {
+          im.geometry.instanceCount = l.k;
+          im.visible = l.k > 0;
+        }
+        drawn += l.k;
       }
-      visible += k;
     }
     this.stats.visible = visible;
+    this.stats.drawn = drawn;
   }
 
   // ---------------------------------------------------------------- gantries
