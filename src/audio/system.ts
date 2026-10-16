@@ -67,7 +67,7 @@ export function saveVolumes(v: UserVolumes): void {
   }
 }
 
-/** Where the listener is (the camera, like UE's audio listener) and which way is right on screen. */
+/** Where the listener is (on the car, like UE's listener override) and which way is right on screen. */
 export interface Listener {
   x: number;
   y: number;
