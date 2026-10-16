@@ -101,6 +101,7 @@ for (const car of cars) {
         const d = window.__br.damage;
         return { phase: r.phase, clock: r.clock, total: r.total, pen: r.penalties, rec: r.recovers, dnf: r.dnf, reason: r.dnfReason,
           progress: level.tracker.progress, spins: autopilot?.spins ?? 0, maxSlip: autopilot?.maxSlip ?? 0,
+          fords: level.features?.fordEntries ?? 0, splashes: window.__fx?.carEvents?.splashes ?? 0,
           damage: d ? { value: +d.value.toFixed(3), impacts: d.impacts, maxKmh: +d.maxImpactKmh.toFixed(1), terminal: d.terminal } : null };
     });
     let state;
@@ -124,7 +125,7 @@ for (const car of cars) {
     const frames = await page.evaluate(() => window.__br.perf.frames.slice(30)); // skip warm-up
     const wall = (Date.now() - t0 - loadMs) / 1000;
     const row = {
-      car, dir, time: state.clock, total: state.total, penalties: state.pen, recovers: state.rec, dnf: state.dnf, reason: state.reason,
+      car, dir, fords: state.fords, splashes: state.splashes, time: state.clock, total: state.total, penalties: state.pen, recovers: state.rec, dnf: state.dnf, reason: state.reason,
       damage: state.damage, progress: +state.progress.toFixed(3),
       finished: state.phase === 'results' && !state.dnf, spins: state.spins, maxSlip: Math.round(state.maxSlip),
       resets: samples.resets, surfaces: { road: samples.road, verge: samples.verge, out: samples.out },
@@ -146,7 +147,7 @@ for (const car of cars) {
     console.log(`${car.padEnd(6)} ${dir} ${row.finished ? fmt(row.time) : state.phase === 'results' ? `DNF (${state.reason} at ${(state.progress * 100).toFixed(0)}%)` : `(${state.phase} ${(state.progress * 100).toFixed(0)}%)`}` +
       ` damage ${JSON.stringify(row.damage)}` +
       ` total ${fmt(row.total)} pen ${row.penalties} spins ${row.spins} maxslip ${row.maxSlip}` +
-      ` resets ${JSON.stringify(row.resets)} wall ${row.wall}s load ${loadMs}ms`);
+      ` resets ${JSON.stringify(row.resets)}${row.fords ? ` fords ${row.fords} splashes ${row.splashes}` : ''} wall ${row.wall}s load ${loadMs}ms`);
     console.log(`  surfaces ${JSON.stringify(row.surfaces)}`);
     console.log(`  build ${JSON.stringify(Object.fromEntries(Object.entries(timings).map(([k, v]) => [k, Math.round(v)])))}`);
     if (row.perf) console.log(`  perf ${row.frames} frames, ${row.spikes} over 25 ms ${JSON.stringify(row.perf)}`);

@@ -202,8 +202,14 @@ export function instanceMaterials(): Record<string, THREE.Material> {
   far.receivedShadowNode = foliage.receivedShadowNode;
   if (OFF.has('lit')) foliage.lights = far.lights = false;
   if (OFF.has('mask')) flat.maskNode = foliage.maskNode = g.maskNode = far.maskNode = null;
+  // fade meshes (the covered bridge): Flat with the see-through toward the car, radius 8 m
+  const flatFade = standard('FlatFade', { roughness: 0.85, flatShading: true });
+  flatFade.positionNode = placed();
+  flatFade.colorNode = flat.colorNode;
+  flatFade.maskNode = OFF.has('occ') ? flat.maskNode : dithered(float(1).sub(occluder(8, 0.85)).mul(fadeBand()[0]), fadeBand()[1]);
+  flatFade.maskShadowNode = bool(true);
   const out: Record<string, THREE.Material> = {
-    Flat: flat, Foliage: foliage, FoliageFar: far, Glow: g,
+    Flat: flat, FlatFade: flatFade, Foliage: foliage, FoliageFar: far, Glow: g,
     // diffuse-only foliage for low quality (stage.ts setLod swaps them in)
     FoliageL: lambertCopy(foliage), FoliageFarL: lambertCopy(far),
   };
@@ -235,24 +241,43 @@ const GROUND: Record<string, [number, Tinted | null]> = {
   Dirt: [0.95, 'Dirt'], Rock: [0.9, 'Rock'], Snow: [0.7, null], Flat: [0.85, 'Flat'],
 };
 
-export function terrainMaterials(): Record<string, THREE.Material> {
+/**
+ * Terrain options per stage: `rockFade` gives the Rock slot the canyon see-through (arizona: the walls
+ * dither out between the camera and the car while U.rockFade is up, radius 4.5 m); `water` is the stage's
+ * water look (stage_runtime.json features.water.<stage>: ShoreColor "#hex", ShoreFadeCm, ShoreOpacity,
+ * DeepOpacity, Tint [r, g, b] linear).
+ */
+export interface TerrainOptions {
+  rockFade?: boolean;
+  water?: Record<string, string | number | number[]>;
+}
+
+export function terrainMaterials(opts: TerrainOptions = {}): Record<string, THREE.Material> {
   const out: Record<string, THREE.Material> = {};
   for (const [slot, [roughness, tint]] of Object.entries(GROUND)) {
     const m = standard(slot, { roughness, flatShading: true });
     m.colorNode = tint ? grade(vertexRgb(), U.tint[tint]) : vertexRgb();
+    if (slot === 'Rock' && opts.rockFade && !OFF.has('occ')) {
+      m.maskNode = dithered(float(1).sub(occluder(4.5, U.rockFade)));
+      m.maskShadowNode = bool(true);
+    }
     out[slot] = m;
   }
-  out.Water = OFF.has('water') ? standard('Water', { roughness: 0.18, transparent: true, opacity: 0.8 }) : water();
+  out.Water = OFF.has('water') ? standard('Water', { roughness: 0.18, transparent: true, opacity: 0.8 }) : water(opts.water);
   return out;
 }
 
-/** Lakes: graded vertex colour in deep water, shore colour where it is shallow (scene depth over 4.5 m). */
-function water() {
+/** Lakes and streams: graded vertex colour × Tint in deep water, the shore colour where it is shallow (scene depth over ShoreFadeCm). */
+function water(p: TerrainOptions['water'] = {}) {
   const m = standard('Water', { roughness: 0.18, transparent: true, side: THREE.DoubleSide, depthWrite: false });
+  const num = (k: string, d: number) => (typeof p[k] === 'number' ? (p[k] as number) : d);
+  const shoreHex = typeof p.ShoreColor === 'string' ? p.ShoreColor : null;
+  const shore = shoreHex ? new THREE.Color(shoreHex) : new THREE.Color(0.45, 0.72, 0.75);
+  const t = Array.isArray(p.Tint) ? (p.Tint as number[]) : [1, 1, 1];
   const sceneZ = perspectiveDepthToViewZ(viewportDepthTexture(), cameraNear, cameraFar);
-  const depth = saturate(positionView.z.sub(sceneZ).div(4.5));
-  m.colorNode = mix(vec3(0.45, 0.72, 0.75), grade(vertexRgb(), U.tint.Water), depth);
-  m.opacityNode = mix(float(0.55), float(0.96), depth);
+  const depth = saturate(positionView.z.sub(sceneZ).div(num('ShoreFadeCm', 450) / 100));
+  m.colorNode = mix(vec3(shore.r, shore.g, shore.b), grade(vertexRgb(), U.tint.Water).mul(vec3(t[0], t[1], t[2])), depth);
+  m.opacityNode = mix(float(num('ShoreOpacity', 0.55)), float(num('DeepOpacity', 0.96)), depth);
   return m;
 }
 

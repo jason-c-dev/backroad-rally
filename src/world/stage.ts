@@ -13,6 +13,10 @@ import type { Surface } from '../sim/tuning';
 import { instanceMaterials, propMaterials, terrainMaterials } from '../look/materials';
 import { fadeBand, mergeParts, vegetationLods } from './lod';
 import { instanceColliderDescs } from './colliders';
+import type { FeaturesJson } from './features';
+import { decodeInstances, type InstanceTableJson } from './instanceTable';
+
+export type { InstanceTableJson };
 
 export interface StageJson {
   id: string;
@@ -28,7 +32,10 @@ export interface StageJson {
   unique_meshes: { mesh: string; p: number[]; rotY: number; collision: string }[];
   water_level: number | null;
   bounds: [number[], number[]] | null;
-  bin: { floats_per_instance: number; instances: Record<string, [number, number]>; breakables: Record<string, [number, number]> };
+  bin: InstanceTableJson;
+  /** Fords: the road's s range and the water surface height (m). */
+  fords?: { s0: number; s1: number; water: number }[];
+  water_bodies?: { name: string; level: number }[];
   env_meshes: string[];
 }
 
@@ -57,6 +64,9 @@ export interface StageRuntimeJson {
   cull: Record<string, [number, number]>;
   gantries: { start: string; finish: string; leg_offset_cm: number };
   draw_distance: { scale: { default: number[] } };
+  /** Per-stage cull bands (cm) by category (vermont's dense maples: 75-120 m). */
+  cull_stage?: Record<string, Record<string, [number, number]>>;
+  features?: FeaturesJson;
 }
 
 const CHUNK = 256; // m: one terrain tile
@@ -75,9 +85,6 @@ const slotName = (m: THREE.Material) => m.name.replace(/\.\d+$/, '');
  * instance matrices in a uniform block named after the node, so every chunk compiled its own
  * vertex program (2200 programs, 8-45 s of hitches).
  */
-function makeMaterials() {
-  return { tiles: terrainMaterials(), instances: instanceMaterials(), props: propMaterials() };
-}
 
 /** COLOR_0 is RGBA (alpha = sway weight on vegetation): keep RGB as the colour, alpha as `sway`. */
 function splitColour(g: THREE.BufferGeometry): void {
@@ -208,14 +215,18 @@ export class Stage {
     const t0 = performance.now();
     const [json, bin, stageGltf, envGltf] = await Promise.all([
       fetch(`${base}data/stages/${id}.json`).then((r) => r.json() as Promise<StageJson>),
-      fetch(`${base}data/stages/${id}.bin`).then((r) => r.arrayBuffer()).then((b) => new Float32Array(b)),
+      fetch(`${base}data/stages/${id}.bin`).then((r) => r.arrayBuffer()),
       loader().loadAsync(assetUrl(`stages/${id}.glb`)),
       loader().loadAsync(assetUrl(`env/env_${id}.glb`)),
     ]);
-    const stage = new Stage(json, bin, catalog, runtime);
+    const stage = new Stage(json, await decodeInstances(json.bin, bin), catalog, runtime);
     const t1 = performance.now();
     stage.timings.fetch = t1 - t0;
-    const mats = makeMaterials();
+    const f = runtime.features ?? {};
+    const mats = {
+      tiles: terrainMaterials({ rockFade: !!f.rock_fade_zones?.[id]?.length, water: f.water?.[id] }),
+      instances: instanceMaterials(),
+    };
     stage.buildTerrain(stageGltf.scene, mats.tiles, rapier, world);
     const t2 = performance.now();
     stage.timings.terrain = t2 - t1;
@@ -330,8 +341,54 @@ export class Stage {
   }
 
   private bandFor(category: string): [number, number] {
-    const c = this.runtime.cull[category] ?? this.runtime.cull.default;
+    const c = this.runtime.cull_stage?.[this.json.id]?.[category] ?? this.runtime.cull[category] ?? this.runtime.cull.default;
+    // [0, 0] = never culled (the arizona buttes, category backdrop)
+    if (c[1] <= 0) return [Infinity, Infinity];
     return [c[0] / 100, c[1] / 100];
+  }
+
+  /** Animal positions (three metres): the location one-shots play at the nearest. */
+  readonly animals: { x: number; y: number; z: number }[] = [];
+  /** Per instance: 1 = no shadow caster (far_no_shadow). */
+  private noShadow!: Uint8Array;
+  /** The fade meshes' drawn parts (the covered bridge), for setFadeMeshShadows. */
+  private fadeMeshParts: THREE.Mesh[] = [];
+  /** The covered bridge casts no shadow while the car is under it (features.ts). */
+  setFadeMeshShadows(on: boolean): void {
+    for (const m of this.fadeMeshParts) m.castShadow = on && (this.catalog[m.name.split(/[~@]/)[0]]?.shadow ?? true);
+  }
+
+  private tintCache = new Map<string, { geometry: THREE.BufferGeometry; slot: string }[]>();
+  /**
+   * An env mesh with its pure-white vertices in a white_tint colour (the original's mask: min(r, g, b) >= 0.98).
+   * The colour goes in as its sRGB value: the materials decode vertex colours once more (materials.ts vertexRgb),
+   * which gives the linear hex colour the original lerped to.
+   */
+  private tintedParts(mesh: string, hex: string | undefined) {
+    const key = `${mesh}~${hex}`;
+    let out = this.tintCache.get(key);
+    const parts = this.envGeoms.get(mesh);
+    if (out || !parts) return out ?? parts;
+    const c = new THREE.Color(hex ?? '#ffffff');
+    const srgb = c.clone().convertLinearToSRGB();
+    out = parts.map((p) => {
+      const g = p.geometry.clone();
+      const col = g.getAttribute('color');
+      if (col) {
+        const a = new Float32Array(col.count * 3);
+        for (let i = 0; i < col.count; i++) {
+          const r = col.getX(i), gg = col.getY(i), b = col.getZ(i);
+          const white = Math.min(r, gg, b) >= 0.98;
+          a[i * 3] = white ? srgb.r : r;
+          a[i * 3 + 1] = white ? srgb.g : gg;
+          a[i * 3 + 2] = white ? srgb.b : b;
+        }
+        g.setAttribute('color', new THREE.BufferAttribute(a, 3));
+      }
+      return { geometry: g, slot: p.slot };
+    });
+    this.tintCache.set(key, out);
+    return out;
   }
 
   private mats: Record<string, THREE.Material> = {};
@@ -353,9 +410,16 @@ export class Stage {
       ...Object.entries(this.json.bin.instances).map(([mesh, r]) => [mesh, r, false] as const),
       ...Object.entries(this.json.bin.breakables).map(([mesh, r]) => [mesh, r, true] as const),
     ];
+    const features = this.runtime.features ?? {};
+    const farNoShadow = new Set(features.far_no_shadow?.[this.json.id] ?? []);
+    const fadeMeshes = new Set(features.fade_meshes ?? []);
+    const idleCats = new Set((features as { idle?: { categories?: string[] } }).idle?.categories ?? []);
+    this.noShadow = new Uint8Array(n);
     for (const [mesh, [offset, count], breakable] of tables) {
-      const cat = this.catalog[mesh];
-      const parts = this.envGeoms.get(mesh);
+      // "<mesh>~<k>": the mesh with its white vertices in white_tint colour k (cows, sheep; stage.mjs)
+      const [baseMesh, tintK] = mesh.split('~');
+      const cat = this.catalog[baseMesh];
+      const parts = tintK !== undefined ? this.tintedParts(baseMesh, features.white_tint?.[baseMesh]?.[Number(tintK)]) : this.envGeoms.get(mesh);
       if (!cat || !parts) {
         console.warn(`stage ${this.json.id}: no mesh or catalog entry for ${mesh}`);
         continue;
@@ -375,6 +439,15 @@ export class Stage {
         list.push(i);
       }
       const [start, end] = this.bandFor(cat.category);
+      // far_no_shadow.<stage>: the far scatter (beyond the collider distance) casts no shadow (vermont's trees)
+      if (farNoShadow.has(cat.category)) {
+        for (let i = offset; i < offset + count; i++) if (this.road.distanceTo(bin[i * F], bin[i * F + 2]) > nearRoad) this.noShadow[i] = 1;
+      }
+      const fadeMesh = fadeMeshes.has(baseMesh);
+      // animals (features.idle.categories): where the location one-shots play (cowbells, sheep)
+      if (idleCats.has(cat.category)) {
+        for (let i = offset; i < offset + count; i++) this.animals.push({ x: bin[i * F], y: bin[i * F + 1], z: bin[i * F + 2] });
+      }
       // vegetation: three levels of detail and the same as shadow-only casters (lod.ts)
       const lodded = LOD_CATEGORIES.has(cat.category) && parts.some((pt) => pt.slot === 'Foliage');
       const levelParts = lodded ? this.lodParts(mesh, parts) : [parts];
@@ -405,7 +478,8 @@ export class Stage {
             // three culls the chunk per camera (main and shadow) with this sphere; the instances move
             // inside it as they are compacted, so it is set once and never recomputed
             g.boundingSphere = sphere;
-            const slot = part.slot === 'Foliage' && lodded && n >= FAR_LEVEL ? 'FoliageFar' : part.slot;
+            // fade_meshes (the covered bridge): their Flat parts dither out between the camera and the car
+            const slot = part.slot === 'Foliage' && lodded && n >= FAR_LEVEL ? 'FoliageFar' : fadeMesh && part.slot === 'Flat' ? 'FlatFade' : part.slot;
             const matKey = mats[slot] ? `${slot}${solid ? '!' : ''}` : `Flat${solid ? '!' : ''}`;
             const im = new THREE.Mesh(g, mats[matKey]);
             im.userData.mat = matKey;
@@ -415,13 +489,14 @@ export class Stage {
             im.receiveShadow = !shadowOnly;
             if (shadowOnly) im.layers.set(1);
             im.name = `${mesh}@${key}${lodded ? (shadowOnly ? `:shadow${n}` : `:lod${n}`) : ''}${solid ? '!' : ''}`;
+            if (fadeMesh) this.fadeMeshParts.push(im);
             this.group.add(im);
             return im;
           });
           // solid twins only where they pay: big alpha-tested canopies (grass is cheap to draw either way,
           // and every twin is another draw call per chunk)
           // (and only on the near levels: far trees are small on screen, their twins were just draw calls)
-          return { parts: meshes, a, b, k: 0, solid: shadowOnly || solid || !lodded || n >= FAR_LEVEL ? null : level(lp, n, false, true) };
+          return { parts: meshes, a, b, k: 0, solid: shadowOnly || solid || !lodded || n >= FAR_LEVEL || fadeMesh ? null : level(lp, n, false, true) };
         };
         const levels = levelParts.map((lp, n) => level(lp, n, false));
         // shadow casters: trunk and foliage in one mesh per level (one draw per cascade instead of two)
@@ -578,7 +653,7 @@ export class Stage {
               this.writeInstance(l, l.k++, i, f);
             }
           }
-          if (g.shadow.length && d2 < shadowRange2) {
+          if (g.shadow.length && d2 < shadowRange2 && !this.noShadow[i]) {
             const s = g.shadow[d2 < shadowCut2 ? lod.shadowNear : lod.shadowFar];
             this.writeInstance(s, s.k++, i, 1);
           }
@@ -607,7 +682,7 @@ export class Stage {
   // ---------------------------------------------------------------- gantries
   /** Start and finish arches at the road (front toward the approaching car), legs on the ground. */
   addGantries(startS: number, finishS: number, sign: number, rapier: typeof RAPIER, world: RAPIER.World,
-    propMats: Record<string, THREE.Material> = makeMaterials().props): void {
+    propMats: Record<string, THREE.Material> = propMaterials()): void {
     const g = this.runtime.gantries;
     const legOffset = g.leg_offset_cm / 100;
     const place = (mesh: string, s: number) => {

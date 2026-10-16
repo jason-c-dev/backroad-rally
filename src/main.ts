@@ -35,8 +35,12 @@ import { events as fxEvents } from './game/events';
 import { Damage, type DamageJson, type Hit } from './game/damage';
 import { BodyContacts } from './game/contacts';
 import { mainSurface } from './game/carEvents';
+import { StageFeatures } from './world/features';
+import { Rng } from './fx/config';
 
 const params = new URLSearchParams(location.search);
+/** The stages in the original's order (?stage=<id>, N cycles them). */
+const STAGES = ['finland', 'japan', 'alps', 'wales', 'arizona', 'vermont'] as const;
 /** Headless runs: ?timescale=4 runs the game (physics, flow, camera) four times faster than the clock. */
 const timeScale = Math.min(Math.max(Number(params.get('timescale') ?? 1) || 1, 0.1), 16);
 
@@ -231,9 +235,14 @@ async function main() {
     carEvents.step(vehicle, dt);
     return out;
   };
+  // fords: the splash event (audio) reads the water under the car, the spray goes into the dust pool
+  const features = (level as { features?: StageFeatures }).features ?? null;
+  if (features) carEvents.waterAt = () => features.water;
+  const sprayRng = new Rng(2024);
   const levelFrame = level.frame?.bind(level);
   level.frame = (dt, cameraPos) => {
     levelFrame?.(dt, cameraPos);
+    features?.frame(dt, vehicle, (level as { tracker?: RoadTracker }).tracker?.proj ?? null, fx.enabled ? fx.pools.dust : null, sprayRng);
     fx.update(dt, vehicle, sim.renderPos, sim.renderRot, look);
     const run = (level as { run?: { phase: string; dnf: boolean } }).run;
     // a retired run coasts like a finish but gets no applause (the original's NotifyFinish skips a DNF)
@@ -306,6 +315,18 @@ async function main() {
     document.body.classList.toggle('no-debug', !now.debug);
     saveHudSettings({ ...loadHudSettings(), ...change });
   };
+  // stages until the stage select (slice 9): N next stage (shift+N previous), B the other direction.
+  // A fresh page load, so the old stage's GPU buffers, colliders and sounds all go with it.
+  addEventListener('keydown', (e) => {
+    if (e.repeat || (e.code !== 'KeyN' && e.code !== 'KeyB')) return;
+    const q = new URLSearchParams(location.search);
+    if (e.code === 'KeyN') {
+      const i = STAGES.indexOf(stageId as (typeof STAGES)[number]);
+      q.set('stage', STAGES[(i + (e.shiftKey ? STAGES.length - 1 : 1) + (i < 0 ? 1 : 0)) % STAGES.length]);
+    } else if (reverse) q.delete('dir');
+    else q.set('dir', 'reverse');
+    location.search = q.toString();
+  });
   addEventListener('keydown', (e) => {
     if (e.repeat) return;
     if (e.code === 'KeyU') setHud({ units: hudSettings.units === 'mph' ? 'kmh' : 'mph' });
@@ -371,7 +392,7 @@ async function main() {
       `\n${look.cond.name} · post ${look.post.enabled ? 'on' : 'off'} · quality ${look.qualityName}` +
       `${look.scale < 1 ? ` ${Math.round(look.scale * 100)}%` : ''}${auto ? ' (auto)' : ''}` +
       `\nw s a d drive · space handbrake · r recover · t traction assist · c camera · l livery · enter restart · k time of day · p post` +
-      ` · u km/h or mph · i speed dial · f3 this panel`;
+      ` · u km/h or mph · i speed dial · f3 this panel · n next stage · b direction`;
     const r0 = performance.now();
     look.render();
     const info = renderer.info.render as unknown as { drawCalls: number; triangles: number };
@@ -406,6 +427,8 @@ async function buildStageLevel(id: string, reverse: boolean, rapier: typeof RAPI
   scene.add(stage.group);
   for (const c of params.get('hide')?.split(',') ?? []) stage.hidden.add(c);
   if (params.get('occtest') === '0') stage.occluderReach = -1e9; // dev: no see-through test (measuring)
+  // fords, bridges, the canyon rock fade, the covered bridge's shadow (src/world/features.ts)
+  const features = new StageFeatures(stage, runtime.features ?? {});
   const v = stage.json.variants[reverse ? 'reverse' : 'forward'];
   const rules = {
     ...DEFAULT_RULES,
@@ -458,6 +481,7 @@ async function buildStageLevel(id: string, reverse: boolean, rapier: typeof RAPI
         getSim().snap();
         if (run.phase === 'running') run.penalty();
       }
+      features.step(veh, tracker.proj, dt);
       const p = veh.position;
       const outside = !!bounds && (p.x < bounds[0][0] - 50 || p.x > bounds[1][0] + 50 || p.z < bounds[0][2] - 50 || p.z > bounds[1][2] + 50);
       if (ap) {
@@ -495,7 +519,7 @@ async function buildStageLevel(id: string, reverse: boolean, rapier: typeof RAPI
     info: () => `${id} s=${tracker.proj?.s.toFixed(0) ?? '-'} · ${stage.stats.visible} inst${ap ? ' · autopilot' : ''}`,
     visible: () => stage.stats.visible,
   };
-  Object.assign(level, { tracker, stage, autopilot: ap });
+  Object.assign(level, { tracker, stage, autopilot: ap, features });
   return level;
 }
 
