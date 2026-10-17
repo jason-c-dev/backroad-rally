@@ -2,7 +2,6 @@
 // the user's volumes (localStorage), the decoded sounds, looping voices and one-shots.
 // Browser rules: the context is made suspended and resumes on the first key or click; M mutes; the
 // context suspends while the tab is hidden.
-import { readSection, writeSection } from '../settings';
 import { GROUPS, attenuate, clamp, groupGain, voiceGain, type Attenuation, type Group, type MixJson } from './mix';
 
 export interface SoundEntry {
@@ -37,27 +36,8 @@ export interface AudioManifest {
   music: Record<string, MusicEntry>;
 }
 
-export interface UserVolumes {
-  master: number;
-  muted: boolean;
-  groups: Record<Group, number>;
-}
-
-/** The volumes live in the game's one settings store (src/settings.ts), section 'audio' (backroad-rally.audio). */
-export function loadVolumes(): UserVolumes {
-  const v: UserVolumes = { master: 0.8, muted: false, groups: Object.fromEntries(GROUPS.map((g) => [g, 1])) as Record<Group, number> };
-  const s = readSection<UserVolumes>('audio');
-  if (s) {
-    if (typeof s.master === 'number') v.master = clamp(s.master, 0, 1);
-    if (typeof s.muted === 'boolean') v.muted = s.muted;
-    for (const g of GROUPS) if (typeof s.groups?.[g] === 'number') v.groups[g] = clamp(s.groups[g], 0, 1);
-  }
-  return v;
-}
-
-export function saveVolumes(v: UserVolumes): void {
-  writeSection('audio', v);
-}
+export { loadVolumes, saveVolumes, type UserVolumes } from '../settings';
+import { loadVolumes, saveVolumes, type UserVolumes } from '../settings';
 
 /** Where the listener is (on the car, like UE's listener override) and which way is right on screen. */
 export interface Listener {
@@ -189,11 +169,19 @@ export class AudioSystem {
   }
   readonly muffles = new Map<Group, IIRFilterNode>();
 
+  /** The game is paused (src/main.ts): every group but ui and music is silent. */
+  paused = false;
+  setPaused(p: boolean): void {
+    if (p === this.paused) return;
+    this.paused = p;
+    this.applyVolumes();
+  }
   /** Push the user's volumes to the group and master nodes (and save them). */
   applyVolumes(instant = false, save = false): void {
     const t = this.ctx.currentTime;
     const set = (p: AudioParam, v: number) => (instant ? p.setValueAtTime(v, t) : p.setTargetAtTime(v, t, 0.03));
-    for (const g of GROUPS) set(this.groups[g].gain, this.groupGain(g));
+    // paused: only the interface and the music keep sounding (UE SetPause; the UI sounds play while paused)
+    for (const g of GROUPS) set(this.groups[g].gain, this.paused && g !== 'ui' && g !== 'music' ? 0 : this.groupGain(g));
     set(this.master.gain, this.volumes.muted ? 0 : this.volumes.master * (this.mix.master ?? 1));
     if (save) saveVolumes(this.volumes);
   }

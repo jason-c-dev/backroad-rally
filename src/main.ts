@@ -9,7 +9,10 @@ import { ChaseCamera } from './camera/chaseCamera';
 import { Controls } from './input/controls';
 import { FrameHud } from './hud/frameHud';
 import { StageHud, type HudInfo, type HudJson } from './hud/stageHud';
-import { loadHudSettings, loadRunSettings, saveHudSettings, saveRunSettings, type HudSettings } from './settings';
+import {
+  loadDisplaySettings, loadGameSettings, loadHudSettings, loadRunSettings, loadVolumes, saveDisplaySettings, saveGameSettings, saveHudSettings,
+  saveRunSettings, saveVolumes, type HudSettings,
+} from './settings';
 import { posM } from './ue';
 import { createWorld, initPhysics } from './sim/physics';
 import { buildTestTrackPhysics } from './sim/testTrackPhysics';
@@ -23,7 +26,7 @@ import { Autopilot, DEFAULT_AUTOPILOT } from './game/autopilot';
 import { Look } from './look/look';
 import { CONDITIONS, pickCondition, type ConditionsJson } from './look/conditions';
 import { QUALITY } from './look/quality';
-import { AutoQuality, LADDER, initialRung } from './look/autoQuality';
+import { AUTO_DEFAULTS, AutoQuality, LADDER, initialRung } from './look/autoQuality';
 // fx (slice 6)
 import { Fx } from './fx/fx';
 import type { FxJson } from './fx/config';
@@ -38,11 +41,20 @@ import { mainSurface } from './game/carEvents';
 import { StageFeatures } from './world/features';
 import { Rng } from './fx/config';
 // weather (slice 8)
-import { arcadeScale, icePatches, iceWeightAt, nextWeather, pickWeather, puddleSites, weatherDef, type RoadForWeather, type WeatherDef, type WeatherJson } from './game/weather';
+import { arcadeScale, iceWeightAt, nextWeather, pickWeather, weatherDef, type WeatherDef, type WeatherJson } from './game/weather';
 import { materialWeather } from './look/materials';
 import { Precipitation } from './fx/precip';
-import { RoadMarks } from './fx/roadMarks';
+import type { RoadMarks } from './fx/roadMarks';
 import { deepMerge } from './sim/tuning';
+// game flow (slice 9)
+import { FrameLimiter, buildRoadMarks, createRenderer, dofOptions, gpuName, lookOverrides, type DofJson } from './boot';
+import { pageKind, parsePlay, putMenuState, type PlaySetup } from './menu/nav';
+import { loadMenuData, stageMeta } from './menu/data';
+import { loadingCard, menuHref } from './menu/menu';
+import { StageMenus, type ResultsInfo } from './menu/stageMenus';
+import type { SettingsHost } from './menu/settingsPanel';
+import { bestKey, loadSave, recordBest, writeSave } from './game/save';
+import type { AudioHandle } from './audio';
 
 const params = new URLSearchParams(location.search);
 /** The stages in the original's order (?stage=<id>, N cycles them). */
@@ -60,14 +72,6 @@ const perf = {
   },
 };
 
-interface DofJson {
-  fstop: number;
-  ref_distance_cm: number;
-  focus_offset_cm: number;
-  post?: { DepthOfFieldSensorWidth?: number };
-  by_weather?: Record<string, { fstop_scale?: number; focus_offset_cm?: number }>;
-}
-
 /** What the game loop needs from the place it drives in: the test bench or a stage. */
 interface Level {
   surfaceAt: SurfaceQuery;
@@ -82,6 +86,8 @@ interface Level {
   visible?(): number;
   /** Called when the stage restarts (Enter): repair the car. */
   onRestart?(): void;
+  /** Restart the run on the next frame (Enter, the pause menu, the results). */
+  restart?(): void;
   /** What the HUD shows of the damage (null = off), and the condition for the intro card. */
   damageView?(): HudInfo['damage'];
   condition?(): string;
@@ -93,41 +99,105 @@ interface Level {
 }
 
 async function main() {
-  const app = document.getElementById('app')!;
-
-  // WebGPU with its built-in WebGL2 fallback; ?webgl forces the fallback for testing. Both ask for the
-  // fast GPU: WebGPU through the adapter request, WebGL2 through a context made here (three's fallback
-  // doesn't pass powerPreference on). Browsers may ignore it: desktop Chrome on Linux renders on the
-  // GPU it runs on, which on a hybrid laptop is the integrated one.
-  const autoQuality = !params.has('quality') || params.get('quality') === 'auto' || !QUALITY[params.get('quality')!];
-  const gpuAdapter = !params.has('webgl') && 'gpu' in navigator
-    ? await (navigator as unknown as { gpu: { requestAdapter(o: object): Promise<unknown> } }).gpu.requestAdapter({ powerPreference: 'high-performance' }).catch(() => null)
-    : null;
-  const forceWebGL = !gpuAdapter;
-  const canvas = document.createElement('canvas');
-  const context = forceWebGL
-    ? canvas.getContext('webgl2', { powerPreference: 'high-performance', antialias: true, alpha: true, depth: true, stencil: false }) ?? undefined
-    : undefined;
-  const renderer = new THREE.WebGPURenderer({
-    canvas, context, antialias: true, forceWebGL, powerPreference: 'high-performance',
-    // GPU timer queries: auto quality uses them to see headroom; ?gputime reports them
-    trackTimestamp: params.has('gputime') || autoQuality,
-  });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-  renderer.setSize(innerWidth, innerHeight);
-  renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFShadowMap; // PCFSoft is gone from WebGPURenderer (it warns and falls back)
-  await renderer.init();
-  app.appendChild(renderer.domElement);
-  const backend = (renderer.backend as { isWebGPUBackend?: boolean }).isWebGPUBackend ? 'webgpu' : 'webgl2';
-  // ?hud=0 hides every overlay (look comparisons); ?hud=80..130 is the HUD size (src/settings.ts)
+  // ?hud=0 hides every overlay (look comparisons)
   if (params.get('hud') === '0') document.body.classList.add('no-hud');
+  const kind = pageKind(params);
+  if (kind === 'menu') {
+    const { runMenu } = await import('./menu/menuPage');
+    await runMenu(params);
+    return;
+  }
+  await runStage(kind === 'play' ? parsePlay(params) : null);
+}
+
+/**
+ * A stage run: from the stage select (?mode=quick|attack&..., `play`), or a development URL (?stage=, ?car=,
+ * ?autopilot=: `play` null) that skips the menus as before.
+ */
+async function runStage(play: PlaySetup | null) {
+  // the loading card first (UE: the stage level shows the menu's card while it warms up)
+  const menuData = await loadMenuData().catch(() => null);
+  const carId = play?.car ?? params.get('car') ?? 'swift';
+  const stageId = play?.stage ?? params.get('stage') ?? 'finland';
+  const reverse = play ? play.reverse : params.get('dir') === 'reverse';
+  const gameSettings = loadGameSettings();
+  const display = loadDisplaySettings();
   const hudSettings = loadHudSettings(params);
+  const runCfg = await load<StageRuntimeJson & { flow: FlowConfig & Record<string, number> }>('stage_runtime.json');
+  const flowCfg = { ...DEFAULT_FLOW, warmup_min_s: 1.5, warmup_max_s: 6, warmup_frame_ms: 25, warmup_stable_frames: 45, curtain_fade_s: 0.6, ...runCfg.flow };
+  const meta = menuData ? stageMeta(menuData, stageId) : undefined;
+  const subPause = [meta?.name ?? stageId, meta?.location ?? '', reverse ? 'reverse' : 'forward'].filter(Boolean).join('  ·  ');
+  const subResults = [meta?.location ?? '', meta?.name ?? stageId, reverse ? 'reverse' : 'forward'].filter(Boolean).join('  ·  ');
+
+  // late-bound pieces the menus act on
+  let level: Level | undefined;
+  let paused = false;
+  let audio: AudioHandle | null = null;
+  const actions = { restart: () => {}, recover: () => {}, applyGame: () => {}, applyDisplay: () => {}, applyHud: () => {} };
+  const volumes = loadVolumes();
+  const settingsHost: SettingsHost = {
+    cameraNames: [], defaultCamera: 1, presetFov: () => 40,
+    game: gameSettings, display, hud: hudSettings, volumes,
+    applyGame: () => {
+      saveGameSettings(gameSettings);
+      actions.applyGame();
+    },
+    applyDisplay: () => {
+      saveDisplaySettings(display);
+      actions.applyDisplay();
+    },
+    applyHud: () => {
+      saveHudSettings(hudSettings);
+      actions.applyHud();
+    },
+    applyVolumes: () => {
+      if (audio) {
+        Object.assign(audio.sys.volumes, volumes);
+        audio.sys.applyVolumes(false, true);
+      } else saveVolumes(volumes);
+    },
+    isFullscreen: () => !!document.fullscreenElement,
+    setFullscreen: (on) => void (on ? document.documentElement.requestFullscreen?.() : document.exitFullscreen?.())?.catch?.(() => {}),
+  };
+  const quitTo = (screen: 'title' | 'stageselect') => {
+    putMenuState({
+      screen, flow: play?.mode ?? 'quick', car: carId, livery: play?.livery ?? 0, stage: stageId, reverse,
+      cond: play?.cond ?? 'stage', weather: play?.weather ?? 'stage',
+    });
+    location.assign(menuHref(params));
+  };
+  const menus = new StageMenus({
+    sub: subPause,
+    controls: menuData?.menu.controls ?? [],
+    mode: play?.mode ?? 'dev',
+    canPause: () => {
+      const run = (level as { run?: StageRun } | undefined)?.run;
+      return !!run && run.phase !== 'results';
+    },
+    onPause: (p) => {
+      paused = p;
+      level?.hud && (level.hud.panelOpen = p);
+      audio?.sys.setPaused(p);
+    },
+    restart: () => actions.restart(),
+    recover: () => actions.recover(),
+    quit: quitTo,
+    settings: settingsHost,
+  }, flowCfg);
+  if (menuData) {
+    menus.showCard(loadingCard(menuData, play ?? {
+      mode: 'quick', stage: stageId, reverse, car: carId, livery: 0, cond: params.get('cond') ?? 'afternoon', weather: params.get('weather') ?? 'clear',
+    }));
+    if (!play) (menus.root.querySelector('.loading .card > :nth-child(3)') as HTMLElement | null)?.replaceChildren('development');
+  }
+
+  // quality: ?quality=<tier> pins it for a visit, else the setting (auto = adaptive, autoQuality.ts)
+  const qParam = params.get('quality');
+  const pinnedByUrl = !!qParam && qParam !== 'auto' && !!QUALITY[qParam];
+  const wantAuto = () => !pinnedByUrl && (qParam === 'auto' || display.quality === 'auto');
+  const { renderer, backend } = await createRenderer(params, params.has('gputime') || wantAuto());
   document.body.classList.toggle('no-debug', !hudSettings.debug);
 
-  const carId = params.get('car') ?? 'swift';
-  const stageId = params.get('stage') ?? 'finland';
-  const reverse = params.get('dir') === 'reverse';
   const [camCfg, car, tuningJson, rapier, conditions, weatherJson] = await Promise.all([
     load<CameraData & { dof: DofJson }>('camera.json'),
     loadCar(carId),
@@ -136,9 +206,12 @@ async function main() {
     load<ConditionsJson>('conditions.json'),
     load<WeatherJson>('weather.json'),
   ]);
-  // the weather (slice 8): ?weather=clear|rain|snow|stage, else the stored choice (key J), else clear
+  settingsHost.cameraNames = camCfg.presets.map((p) => p.name);
+  settingsHost.defaultCamera = camCfg.default_preset;
+  settingsHost.presetFov = (i) => camCfg.presets[i]?.fov_v_deg ?? 40;
+  // the weather (slice 8): the stage select's pick (stage = the stage's own), else ?weather=, else the stored choice (key J)
   const runSettings = loadRunSettings();
-  const weatherName = pickWeather(weatherJson, params.get('weather'), stageId, reverse, runSettings.weather);
+  const weatherName = pickWeather(weatherJson, play ? play.weather : params.get('weather'), stageId, reverse, play ? null : runSettings.weather);
   const weather = weatherDef(weatherJson, weatherName);
   const clearWeather = weatherName === 'clear';
   // the materials build the weather code only in rain or snow (before the stage and the car load)
@@ -150,7 +223,6 @@ async function main() {
   const hudRoot = document.body;
   let vehicle!: Vehicle;
   let sim!: Simulation;
-  let level: Level;
   if (stageId === 'test') {
     const track = await load<TestTrack>('testtrack.json');
     scene.add(buildTestStrip(track));
@@ -166,6 +238,9 @@ async function main() {
 
   const model = await loadCarModel(car);
   scene.add(model.root);
+  const liveryParam = play?.livery ?? Number(params.get('livery') ?? 0);
+  let liveryIndex = Math.min(Math.max(Math.round(liveryParam) || 0, 0), car.liveries.length - 1);
+  if (liveryIndex) model.setLivery(car.liveries[liveryIndex]);
   const tuning = loadCarTuning(tuningJson, car as unknown as Record<string, unknown>, carId);
   vehicle = new Vehicle(rapier, world, tuning, level.surfaceAt, car.wheel_pos_cm);
   const arcade = createArcade(vehicle);
@@ -197,31 +272,40 @@ async function main() {
   (level as { attach?: (a: typeof arcade, respawn: () => void) => void }).attach?.(arcade, spawn);
 
   const chase = new ChaseCamera(camCfg, innerWidth / innerHeight);
+  // the settings' camera, field of view and assists (UE ApplySettingsToCar): the assists scale the car's own
+  // defaults, so 100% is the tuned car
+  actions.applyGame = () => {
+    chase.setPreset(gameSettings.camera);
+    chase.fovOverride = gameSettings.fov;
+    arcade.stabilityAssist = vehicle.t.arcade.stability_default * gameSettings.stability;
+    arcade.countersteerAssist = vehicle.t.arcade.countersteer_default * gameSettings.countersteer;
+    if (vehicle.tractionAssist !== gameSettings.tractionAssist) vehicle.setTractionAssist(gameSettings.tractionAssist);
+  };
+  actions.applyGame();
 
   // the look (slice 5): conditions, fog, shadows, post. ?cond=morning|afternoon|sunset|night|fog (or stage),
   // ?post=0 (P toggles), ?quality=auto|high|medium|low, ?scale=0.5..1 (render scale)
-  const dof = camCfg.dof;
-  // quality: pinned by ?quality=<tier>, else adaptive (autoQuality.ts) from a guess by GPU and pixels
   const gpu = gpuName(renderer);
-  const scaleParam = params.has('scale') ? Math.min(Math.max(Number(params.get('scale')) || 1, 0.25), 1) : null;
-  const auto = autoQuality ? new AutoQuality(initialRung(gpu, innerWidth * innerHeight * renderer.getPixelRatio() ** 2)) : null;
-  const autoRung = auto ? auto.rung : null;
-  let condIndex = Math.max(0, CONDITIONS.indexOf(pickCondition(conditions, params.get('cond'), stageId, reverse) as (typeof CONDITIONS)[number]));
+  /** Render scale pinned by ?scale= (a visit) or the render resolution setting; null = auto's ladder (or 1). */
+  const pinnedScale = () => (params.has('scale') ? Math.min(Math.max(Number(params.get('scale')) || 1, 0.25), 1) : display.renderScale > 0 ? display.renderScale / 100 : null);
+  /** The frame-rate limit: the setting, ?fps= for a visit; headless runs (autopilot, timescale) run uncapped. */
+  const limiter = new FrameLimiter();
+  const fpsLimit = () => (params.has('fps') ? Number(params.get('fps')) || 0 : params.has('autopilot') || timeScale !== 1 ? 0 : display.fpsLimit);
+  /** Auto quality counts a frame as missed past one interval of the cap (a 30 fps cap isn't a miss at 33 ms). */
+  const autoOpts = () => ({ ...AUTO_DEFAULTS, missMs: Math.max(AUTO_DEFAULTS.missMs, limiter.fps > 0 ? (1000 / limiter.fps) * 1.2 : 0) });
+  limiter.fps = fpsLimit();
+  let auto = wantAuto() ? new AutoQuality(initialRung(gpu, innerWidth * innerHeight * renderer.getPixelRatio() ** 2), autoOpts()) : null;
+  const pinnedTier = () => (pinnedByUrl ? qParam! : display.quality === 'auto' ? 'high' : display.quality);
+  let condIndex = Math.max(0, CONDITIONS.indexOf(pickCondition(conditions, play ? play.cond : params.get('cond'), stageId, reverse) as (typeof CONDITIONS)[number]));
   const look = new Look(renderer, scene, chase.camera, conditions, {
     stage: stageId,
     condition: CONDITIONS[condIndex],
-    quality: autoRung !== null ? LADDER[autoRung].tier : params.get('quality')!,
-    scale: scaleParam ?? (autoRung !== null ? LADDER[autoRung].scale : 1),
+    quality: auto ? LADDER[auto.rung].tier : pinnedTier(),
+    scale: pinnedScale() ?? (auto ? LADDER[auto.rung].scale : 1),
     upscale: params.get('upscale') === 'fsr' ? 'fsr' : 'browser',
     post: params.get('post') !== '0',
-    override: Object.fromEntries(([['ao', 'ao'], ['aosamples', 'aoSamples'], ['dof', 'dofTaps'], ['msaa', 'msaa'], ['bloom', 'bloom'], ['cascades', 'cascades'], ['hlshadow', 'headlightShadows'], ['shadowmap', 'shadowMap'], ['shadowfar', 'shadowFar']] as const)
-      .filter(([k]) => params.has(k)).map(([k, key]) => [key, key === 'bloom' || key === 'headlightShadows' ? params.get(k) !== '0' : Number(params.get(k))])),
-    dof: {
-      fstop: dof.fstop, refDistance: dof.ref_distance_cm / 100, focusOffset: dof.focus_offset_cm / 100,
-      clearFocusOffset: (dof.by_weather?.clear?.focus_offset_cm ?? dof.focus_offset_cm) / 100,
-      clearFstopScale: dof.by_weather?.clear?.fstop_scale ?? 1, sensorWidth: (dof.post?.DepthOfFieldSensorWidth ?? 36) / 1000,
-      scale: Number(params.get('dofscale') ?? 1) || 1,
-    },
+    override: lookOverrides(params),
+    dof: dofOptions(camCfg.dof, params),
     weather: clearWeather ? null : weather,
   }, { root: model.root, headlightPosCm: (car as unknown as { headlight_pos_cm: number[][] }).headlight_pos_cm });
   look.setCondition(CONDITIONS[condIndex]);
@@ -236,8 +320,31 @@ async function main() {
     stageLevel?.setLod(q.lod);
   };
   look.onQuality(look.quality, look.qualityName);
+  // draw distance: ?draw=near|medium|far|max or a multiplier for a visit, else the setting (default far, x2)
+  const applyDraw = () => {
+    if (!stageLevel) return;
+    const draw = params.get('draw');
+    const names = ['near', 'medium', 'far', 'max'];
+    const scale = runCfg.draw_distance.scale.default;
+    if (draw) stageLevel.drawDistance = names.includes(draw) ? scale[names.indexOf(draw)] : Number(draw) || stageLevel.drawDistance;
+    else stageLevel.drawDistance = scale[display.drawDistance < 0 ? 2 : display.drawDistance] ?? 2;
+  };
+  applyDraw();
+  // the display settings, at once: quality (auto or a tier), render resolution, draw distance, frame-rate limit
+  actions.applyDisplay = () => {
+    limiter.fps = fpsLimit();
+    if (wantAuto()) {
+      if (!auto) auto = new AutoQuality(initialRung(gpu, innerWidth * innerHeight * (renderer.getPixelRatio() / Math.max(look.scale, 0.01)) ** 2), autoOpts());
+      look.setQuality(LADDER[auto.rung].tier, pinnedScale() ?? LADDER[auto.rung].scale);
+    } else {
+      auto = null;
+      look.setQuality(pinnedTier(), pinnedScale() ?? 1);
+    }
+    applyDraw();
+  };
   // dev keys: P post on/off, K next condition
   addEventListener('keydown', (e) => {
+    if (menus.open) return;
     if (e.code === 'KeyP') look.setPost(!look.post.enabled);
     if (e.code === 'KeyK') look.setCondition(CONDITIONS[(condIndex = (condIndex + 1) % CONDITIONS.length)]);
   });
@@ -303,9 +410,12 @@ async function main() {
   // --- damage ---
   // src/game/damage.ts: the body's contact impulses (src/game/contacts.ts, read before every physics step) make
   // hits; damage costs torque and pulls the steering, dirties the paint, smokes and burns (src/fx/damageFx.ts),
-  // and terminal damage retires the run. ?damage=0|0.5|1 = the level (0 off, as in time attack; default 1).
+  // and terminal damage retires the run. ?damage=0|0.5|1 = the level; from the menus quick stage is half
+  // (menu.json quick_damage_level) and time attack has none, as in the original.
   const damageCfg = await load<DamageJson>('damage.json');
-  const damageLevel = params.has('damage') ? Math.min(Math.max(Number(params.get('damage')) || 0, 0), 1) : 1;
+  const damageLevel = play
+    ? (play.mode === 'attack' ? 0 : menuData?.menu.quick_damage_level ?? 0.5)
+    : params.has('damage') ? Math.min(Math.max(Number(params.get('damage')) || 0, 0), 1) : 1;
   const damage = new Damage(damageCfg, {
     lengthCm: car.length_cm, widthCm: car.width_cm,
     engineXCm: fxCfg.cars[carId]?.engine_pos_cm?.[0] ?? car.length_cm * 0.32,
@@ -341,7 +451,7 @@ async function main() {
     fireFrom: damageCfg.fire_from,
   };
   // --- /damage ---
-  // place the camera, then build every pipeline now rather than mid-run (the loading curtain will cover this)
+  // place the camera, then build every pipeline now rather than mid-run (the loading curtain covers this)
   chase.update(0, { position: sim.renderPos, forward: new THREE.Vector3(1, 0, 0).applyQuaternion(sim.renderRot), velocity: vehicle.velocity });
   look.update(0, sim.renderPos, innerWidth, innerHeight);
   const stageOf = (level as { stage?: Stage }).stage;
@@ -353,18 +463,19 @@ async function main() {
   const hud = new FrameHud(document.body, backend);
   level.condition = () => look.cond?.name ?? '';
   // HUD keys: U km/h or mph, I number or dial, F3 the debug panel (saved: src/settings.ts)
-  const setHud = (change: Partial<HudSettings>) => {
-    const now = { ...(level.hud?.settings ?? hudSettings), ...change };
-    Object.assign(hudSettings, now);
-    level.hud?.apply(now);
-    document.body.classList.toggle('no-debug', !now.debug);
-    saveHudSettings({ ...loadHudSettings(), ...change });
+  actions.applyHud = () => {
+    level.hud?.apply(hudSettings);
+    document.body.classList.toggle('no-debug', !hudSettings.debug);
   };
-  // stages until the stage select (slice 9): N next stage (shift+N previous), B the other direction.
-  // A fresh page load, so the old stage's GPU buffers, colliders and sounds all go with it.
-  // weather until the stage select: J the next weather (clear, rain, snow), saved, and a fresh load like N and B
+  const setHud = (change: Partial<HudSettings>) => {
+    Object.assign(hudSettings, change);
+    saveHudSettings(hudSettings);
+    actions.applyHud();
+  };
+  // development keys (slice 7, 8): N next stage (shift+N previous), B the other direction, J the next weather: a fresh
+  // page load, so the old stage's GPU buffers, colliders and sounds all go with it
   addEventListener('keydown', (e) => {
-    if (e.repeat || e.code !== 'KeyJ') return;
+    if (e.repeat || menus.open || e.code !== 'KeyJ') return;
     const next = nextWeather(weatherJson, weatherName);
     saveRunSettings({ ...loadRunSettings(), weather: next });
     const q = new URLSearchParams(location.search);
@@ -372,7 +483,7 @@ async function main() {
     location.search = q.toString();
   });
   addEventListener('keydown', (e) => {
-    if (e.repeat || (e.code !== 'KeyN' && e.code !== 'KeyB')) return;
+    if (e.repeat || menus.open || (e.code !== 'KeyN' && e.code !== 'KeyB')) return;
     const q = new URLSearchParams(location.search);
     if (e.code === 'KeyN') {
       const i = STAGES.indexOf(stageId as (typeof STAGES)[number]);
@@ -382,13 +493,15 @@ async function main() {
     location.search = q.toString();
   });
   addEventListener('keydown', (e) => {
-    if (e.repeat) return;
+    if (e.repeat || menus.open) return;
     if (e.code === 'KeyU') setHud({ units: hudSettings.units === 'mph' ? 'kmh' : 'mph' });
     if (e.code === 'KeyI') setHud({ speedo: hudSettings.speedo === 'dial' ? 'number' : 'dial' });
     if (e.code === 'F3') {
       e.preventDefault();
       setHud({ debug: !hudSettings.debug });
     }
+    // Enter restarts the stage (outside the menus, once the curtain is gone)
+    if (e.code === 'Enter' && menus.ready) level.restart?.();
   });
 
   const onResize = () => {
@@ -400,9 +513,26 @@ async function main() {
   addEventListener('resize', onResize);
   onResize(); // the window may have changed while the stage loaded (going fullscreen, for one)
 
+  // restart and recover from the menus
+  actions.restart = () => level.restart?.();
+  actions.recover = () => {
+    if (arcade.recover(vehicle, true)) sim.snap();
+  };
+  // quick stage and time attack keep the best time per stage, direction, car and weather (src/game/save.ts)
+  const save = menuData ? loadSave({ groups: menuData.career.start_groups, cars: menuData.career.start_cars }) : null;
+  let lastResult: ResultsInfo['best'] = null;
+  fxEvents.on('finish', (e) => {
+    lastResult = null;
+    if (!play || !save || e.dnf) return;
+    const fresh = loadSave({ groups: menuData!.career.start_groups, cars: menuData!.career.start_cars });
+    lastResult = recordBest(fresh, bestKey(play.mode, stageId, reverse, carId, weatherName), e.time, carId);
+    if (lastResult.newBest) writeSave(fresh);
+  });
+
   // read-only handle for tools/check (headless runs)
-  (window as unknown as { __br: object }).__br = { vehicle, chase, model, sim, level, renderer, perf, backend, carId, look, gpu, auto, damage, contacts,
+  const br = { vehicle, chase, model, sim, level, renderer, perf, backend, carId, look, gpu, auto, damage, contacts, menus, ready: false, paused: false,
     weather: { name: weatherName, def: weather, ice: level.ice ?? [], marks: level.marks ?? null, precip } };
+  (window as unknown as { __br: object }).__br = br;
 
   // --- audio ---
   // sound (src/audio): engine, tyres, world, music. It reads the game every frame and never writes to it.
@@ -412,24 +542,47 @@ async function main() {
     level: level as unknown as Parameters<typeof startAudio>[0]['level'],
     isNight: () => look.cond?.name === 'night',
     weather: clearWeather ? null : weather.audio,
-  })).catch((e) => console.error('audio:', e));
+  })).then((h) => {
+    audio = h;
+    if (h && paused) h.sys.setPaused(true);
+  }).catch((e) => console.error('audio:', e));
   // --- /audio ---
 
-  let liveryIndex = 0;
   let last = performance.now();
+  let resultsShown = false;
   const camState = { position: sim.renderPos, forward: new THREE.Vector3(), velocity: vehicle.velocity };
   renderer.setAnimationLoop((now: number) => {
+    if (!limiter.due(now)) return;
     const frameDt = now - last;
-    const dt = Math.min(frameDt / 1000, 0.1) * timeScale;
+    const realDt = Math.min(frameDt / 1000, 0.1);
     last = now;
+    // the curtain holds the run (no physics steps) until the stage draws steadily, then fades
+    const ready = menus.frame(realDt, frameDt);
+    br.ready = ready;
+    br.paused = paused;
+    const running = ready && !paused;
+    const dt = running ? realDt * timeScale : 0;
 
-    const { input, actions } = controls.poll();
-    if (actions.has('camera')) chase.cycle();
-    if (actions.has('livery')) model.setLivery(car.liveries[(liveryIndex = (liveryIndex + 1) % car.liveries.length)]);
-    if (actions.has('recover') && arcade.recover(vehicle, true)) sim.snap();
-    if (actions.has('assist')) vehicle.setTractionAssist(!vehicle.tractionAssist);
-    sim.advance(dt, input, level.step);
+    const { input, actions: pressed } = controls.poll();
+    if (running) {
+      if (pressed.has('camera')) chase.cycle();
+      if (pressed.has('livery')) model.setLivery(car.liveries[(liveryIndex = (liveryIndex + 1) % car.liveries.length)]);
+      if (pressed.has('recover') && arcade.recover(vehicle, true)) sim.snap();
+      if (pressed.has('assist')) vehicle.setTractionAssist(!vehicle.tractionAssist);
+      sim.advance(dt, input, level.step);
+    }
     level.frame?.(dt, chase.camera.position);
+    // the results panel opens once the run has coasted to a stop (the menus' rows: restart, another stage, the menu)
+    const run = (level as { run?: StageRun }).run;
+    if (run?.phase === 'results' && !resultsShown) {
+      resultsShown = true;
+      level.hud && (level.hud.panelOpen = false);
+      menus.showResults({ sub: subResults, dnf: run.dnf, reason: run.dnfReason, clock: run.clock, penalties: run.penalties, recovers: run.recovers,
+        total: run.total, best: play ? lastResult : null });
+    } else if (run && run.phase !== 'results' && resultsShown) {
+      resultsShown = false;
+      menus.hideResults();
+    }
 
     model.root.position.copy(sim.renderPos);
     model.root.quaternion.copy(sim.renderRot);
@@ -446,8 +599,8 @@ async function main() {
       ` · traction assist ${vehicle.tractionAssist ? 'on' : 'off'} · camera ${chase.presetName} · ${controls.device}` +
       ` · damage ${damage.enabled ? `${(damage.value * 100).toFixed(0)}%${damage.terminal ? ' (wrecked)' : ''}` : 'off'}` +
       `\n${look.cond.name} · ${weatherName} · post ${look.post.enabled ? 'on' : 'off'} · quality ${look.qualityName}` +
-      `${look.scale < 1 ? ` ${Math.round(look.scale * 100)}%` : ''}${auto ? ' (auto)' : ''}` +
-      `\nw s a d drive · space handbrake · r recover · t traction assist · c camera · l livery · enter restart · k time of day · p post` +
+      `${look.scale < 1 ? ` ${Math.round(look.scale * 100)}%` : ''}${auto ? ' (auto)' : ''}${limiter.fps > 0 ? ` · cap ${limiter.fps}` : ''}` +
+      `\nw s a d drive · space handbrake · r recover · esc pause · t traction assist · c camera · l livery · enter restart · k time of day · p post` +
       ` · u km/h or mph · i speed dial · f3 this panel · n next stage · b direction · j weather`;
     const r0 = performance.now();
     look.render();
@@ -461,7 +614,8 @@ async function main() {
     }
     if (auto) {
       const r = auto.frame(frameDt, perf.gpu);
-      if (r !== null) look.setQuality(LADDER[r].tier, scaleParam ?? LADDER[r].scale);
+      if (r !== null) look.setQuality(LADDER[r].tier, pinnedScale() ?? LADDER[r].scale);
+      br.auto = auto;
     }
     if (perf.frames.length > 100000) perf.frames.splice(0, 50000);
     hud.frame(now, c.width, c.height);
@@ -476,10 +630,6 @@ async function buildStageLevel(id: string, reverse: boolean, rapier: typeof RAPI
     load<HudJson>('hud.json'),
   ]);
   const stage = await Stage.load(id, catalog, runtime, rapier, world);
-  // draw distance: ?draw=near|medium|far|max or a multiplier (default far, x2)
-  const draw = params.get('draw');
-  const named = ['near', 'medium', 'far', 'max'].indexOf(draw ?? '');
-  if (draw) stage.drawDistance = named >= 0 ? runtime.draw_distance.scale.default[named] : Number(draw) || stage.drawDistance;
   scene.add(stage.group);
   for (const c of params.get('hide')?.split(',') ?? []) stage.hidden.add(c);
   if (params.get('occtest') === '0') stage.occluderReach = -1e9; // dev: no see-through test (measuring)
@@ -490,44 +640,7 @@ async function buildStageLevel(id: string, reverse: boolean, rapier: typeof RAPI
   // puddles are placed by the original's rules and random stream (src/game/weather.ts)
   for (const c of weather.hide_categories ?? []) stage.hidden.add(c);
   features.frozen = !!weather.fords_frozen;
-  const rj = stage.json.road as typeof stage.json.road & { y_cm?: number[] };
-  const fords = stage.json.fords ?? [];
-  const roadW: RoadForWeather = {
-    s: stage.road.s,
-    y: rj.y_cm ? rj.y_cm.map((y) => y / 100) : stage.road.y,
-    surfaceAt: (s) => {
-      const S = stage.road.s;
-      let lo = 0, hi = S.length - 1;
-      if (s <= S[0]) lo = 0;
-      else if (s >= S[hi]) lo = hi;
-      else {
-        while (hi - lo > 1) {
-          const mid = (lo + hi) >> 1;
-          if (S[mid] <= s) lo = mid;
-          else hi = mid;
-        }
-      }
-      return rj.surfaces[rj.surface[lo]];
-    },
-    inFord: (s, m) => fords.some((f) => s >= f.s0 - m && s <= f.s1 + m),
-    onBridge: (s, m) => features.onBridge(s, m),
-  };
-  const fwd = stage.json.variants.forward;
-  const ice = weather.ice ? icePatches(weather.ice, id, fwd.start_s, fwd.finish_s, roadW) : [];
-  const decals = weather.road_decals;
-  let marks: RoadMarks | null = null;
-  if (ice.length || decals?.puddles || decals?.ruts) {
-    const down = { x: 0, y: -1, z: 0 };
-    marks = new RoadMarks(stage.road, (x, z, fromY) => {
-      const hit = world.castRay(new rapier.Ray({ x, y: fromY, z }, down), 6, true, undefined, undefined, undefined, undefined, (c) => stage.isTerrain(c));
-      return hit ? fromY - hit.timeOfImpact : null;
-    });
-    if (decals?.puddles) marks.puddles(puddleSites(decals.puddles, id, roadW, (s) => stage.road.sampleAt(s).halfWidth));
-    if (ice.length) marks.ice(ice, weather.ice?.decal_width_scale ?? 0.9);
-    if (decals?.ruts) marks.ruts(decals.ruts.segment_m ?? [3, 8], (decals.ruts.width_cm ?? 240) / 100, (s) => roadW.inFord(s, 6) || roadW.onBridge(s, 2));
-    marks.build();
-    scene.add(marks.mesh);
-  }
+  const { ice, marks } = buildRoadMarks(id, stage, features, weather, rapier, world, scene);
   const rules = {
     ...DEFAULT_RULES,
     corridor: runtime.corridor_cm / 100,
@@ -544,9 +657,6 @@ async function buildStageLevel(id: string, reverse: boolean, rapier: typeof RAPI
   const hud = new StageHud(hudRoot, hudJson, hudSettings);
   const bounds = stage.json.bounds;
   let restartKey = false;
-  addEventListener('keydown', (e) => {
-    if (e.code === 'Enter') restartKey = true;
-  });
   let respawn = () => {};
   const ap = params.has('autopilot') ? new Autopilot(stage.road, tracker, {
     ...DEFAULT_AUTOPILOT,
@@ -562,6 +672,9 @@ async function buildStageLevel(id: string, reverse: boolean, rapier: typeof RAPI
     hud,
     surfaceAt: stage.surfaceAt,
     spawn: () => tracker.startPose(),
+    restart() {
+      restartKey = true;
+    },
     attach(arcade, rs) {
       respawn = rs;
       // recovers go back onto the road a few metres behind, +5 s
@@ -622,18 +735,8 @@ async function buildStageLevel(id: string, reverse: boolean, rapier: typeof RAPI
   return level;
 }
 
-/** The GPU the page landed on (hybrid laptops: headless Chrome picks the integrated one unless told). */
-function gpuName(renderer: THREE.WebGPURenderer): string {
-  const b = renderer.backend as { gl?: WebGL2RenderingContext; adapter?: { info?: { vendor?: string; architecture?: string; description?: string } } };
-  if (b.gl) {
-    const ext = b.gl.getExtension('WEBGL_debug_renderer_info');
-    return ext ? String(b.gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : 'webgl2';
-  }
-  const i = b.adapter?.info;
-  return i ? [i.vendor, i.architecture, i.description].filter(Boolean).join(' ') : 'webgpu';
-}
-
 main().catch((e) => {
   console.error(e);
   document.body.insertAdjacentHTML('beforeend', `<pre id="fatal">${String(e)}</pre>`);
 });
+

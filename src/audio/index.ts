@@ -16,6 +16,88 @@ import { startRecorder, type Recording } from './recorder';
 import { events } from '../game/events';
 import type { WeatherAudioJson } from '../game/weather';
 import { WeatherAudio } from './weatherAudio';
+import { MusicPlayer, menuPlaylist } from './music';
+import { uiSounds } from '../menu/ui';
+import { putMusic, takeMusic } from '../menu/nav';
+
+const UI_SOUNDS = ['A_UI_Click', 'A_UI_Confirm', 'A_UI_Back'];
+
+/** The menus' sounds (UE RallyUI::Click / Confirm / Back / Blocked), playable while the game is paused. */
+function wireUiSounds(sys: AudioSystem): void {
+  void sys.loadAll(UI_SOUNDS);
+  uiSounds.click = () => void sys.play('A_UI_Click', 'ui', 1);
+  uiSounds.confirm = () => void sys.play('A_UI_Confirm', 'ui', 1);
+  uiSounds.back = () => void sys.play('A_UI_Back', 'ui', 1);
+  // a refused press: two of the UI waves pitched well down, a dull "bonk" unlike confirm or back
+  uiSounds.blocked = () => {
+    sys.play('A_UI_Back', 'ui', 1.15, 0.58);
+    sys.play('A_UI_Click', 'ui', 0.9, 0.5);
+  };
+}
+
+async function loadMixFiles(): Promise<{ manifest: AudioManifest; mix: MixJson; base: string }> {
+  const base = import.meta.env.BASE_URL;
+  const get = <T>(f: string) => fetch(`${base}audio/${f}`).then((r) => {
+    if (!r.ok) throw new Error(`audio/${f}: HTTP ${r.status}`);
+    return r.json() as Promise<T>;
+  });
+  const [manifest, mix] = await Promise.all([get<AudioManifest>('manifest.json'), get<MixJson>('mix.json')]);
+  return { manifest, mix, base };
+}
+
+export interface MenuAudioHandle {
+  sys: AudioSystem;
+  music: MusicPlayer;
+  ui: AudioUi;
+}
+
+/**
+ * The menus' sound: the menu playlist (audio_mix.json menu: the menu and calm tracks) and the UI sounds; the parked
+ * car is silent, as in the original. The song goes on across a backdrop swap (a page load): the track and its
+ * position wait in sessionStorage.
+ */
+export async function startMenuAudio(params: URLSearchParams): Promise<MenuAudioHandle | null> {
+  if (params.get('audio') === '0' || !('AudioContext' in window || 'webkitAudioContext' in window)) return null;
+  const { manifest, mix, base } = await loadMixFiles();
+  const sys = new AudioSystem(manifest, mix, base);
+  const ui = new AudioUi(sys);
+  wireUiSounds(sys);
+  const music = new MusicPlayer(sys);
+  const menuMix = (mix as unknown as { menu?: { music_volume?: number; tags?: string[] } }).menu ?? {};
+  music.volume = menuMix.music_volume ?? 1;
+  music.setPlaylist(menuPlaylist(manifest.music, menuMix.tags ?? ['menu', 'calm']));
+  let pending = takeMusic();
+  const begin = () => {
+    if (pending && music.resume(pending.track, pending.time)) {
+      if (music.wantPlay) pending = null;
+    } else {
+      pending = null;
+      music.start();
+    }
+  };
+  sys.onUnlock = begin;
+  if (sys.running) begin();
+  const unlock = () => {
+    if (!sys.running) sys.unlock();
+    else if (!music.wantPlay) begin();
+  };
+  addEventListener('keydown', unlock, true);
+  addEventListener('pointerdown', unlock, true);
+  addEventListener('keydown', (e) => {
+    if (e.repeat) return;
+    if (e.code === 'KeyM') ui.setMuted(!sys.volumes.muted);
+  });
+  addEventListener('pagehide', () => putMusic(music.current));
+  const frame = () => {
+    music.update();
+    ui.frame();
+    requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
+  const handle = { sys, music, ui };
+  (window as unknown as { __brAudio: object }).__brAudio = handle;
+  return handle;
+}
 
 export interface AudioOpts {
   vehicle: Vehicle;
@@ -55,6 +137,7 @@ export async function startAudio(o: AudioOpts): Promise<AudioHandle | null> {
   const recording = o.params.has('audiorec');
   const sys = new AudioSystem(manifest, mix, base, recording ? { sampleRate: 48000 } : {});
   const ui = new AudioUi(sys);
+  wireUiSounds(sys);
 
   const st = o.level.stage;
   let bridges: [number, number][] = [];

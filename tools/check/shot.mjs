@@ -19,7 +19,8 @@ const arg = (k, d) => {
   return i > 0 ? process.argv[i + 1] : d;
 };
 let url = arg('--url', 'http://localhost:4173/backroad-rally/');
-const extra = arg('--params', '');
+// a stage option skips the menus (the default page load opens the title)
+const extra = arg('--params', '') || 'stage=finland';
 if (extra) url += (url.includes('?') ? '&' : '?') + extra;
 if (process.argv.includes('--webgl')) url += (url.includes('?') ? '&' : '?') + 'webgl';
 const at = arg('--at', '');
@@ -41,7 +42,8 @@ page.on('pageerror', (e) => errors.push(String(e)));
 page.on('response', (r) => r.status() >= 400 && errors.push(`HTTP ${r.status()} ${r.url()}`));
 await page.goto(url);
 try {
-  await page.waitForSelector('#frame-hud:not(:empty)', { timeout: 30000 });
+  await page.waitForSelector('#frame-hud:not(:empty)', { timeout: 30000, state: 'attached' });
+  await page.waitForFunction(() => window.__br?.ready, null, { timeout: 30000 }); // the loading curtain is gone
 } catch (e) {
   console.log(`no HUD after 30 s: ${await page.textContent('body')}\n${errors.join('\n')}`);
   await page.screenshot({ path: join(out, 'fail.png') });

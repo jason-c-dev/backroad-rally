@@ -3,8 +3,14 @@
   --ink: #050506;
   --panel: #ffffffc7;
   --accent: #db1f0f;
+  /* the menus (the original's RallyUI colours, linear in Slate, here as Slate shows them in sRGB) */
+  --m-ink: #27272b;
+  --m-ink-soft: rgba(39, 39, 43, 0.5);
+  --m-paper: 250, 248, 243;
+  --m-accent: #ef6145;
+  --m-curtain: #f1ede7;
 }
-html, body { margin: 0; height: 100%; overflow: hidden; background: var(--paper); color: var(--ink); }
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--m-curtain); color: var(--ink); }
 body { font-family: system-ui, sans-serif; }
 #app, #app canvas { display: block; width: 100%; height: 100%; }
 #frame-hud, #fatal {
@@ -16,7 +22,9 @@ body { font-family: system-ui, sans-serif; }
 
 /* stage HUD (src/hud/stageHud.ts; hud.json): --u = px per Slate unit (hud size included), --d = the DPI factor alone;
    --uf / --df the same for font sizes, which Slate gives in points (x 96/72) */
+@font-face { font-family: 'Inter'; font-weight: 300; font-display: block; src: url('/fonts/Inter-Light.woff2') format('woff2'); }
 @font-face { font-family: 'Inter'; font-weight: 400; font-display: block; src: url('/fonts/Inter-Regular.woff2') format('woff2'); }
+@font-face { font-family: 'Inter'; font-weight: 500; font-display: block; src: url('/fonts/Inter-Medium.woff2') format('woff2'); }
 @font-face { font-family: 'Inter'; font-weight: 600; font-display: block; src: url('/fonts/Inter-SemiBold.woff2') format('woff2'); }
 #stage-hud { --u: 1px; --d: 1px; --uf: 1.333px; --df: 1.333px; position: fixed; inset: 0; pointer-events: none; overflow: hidden;
   font-family: Inter, system-ui, sans-serif; font-weight: 400; text-transform: lowercase; font-variant-numeric: tabular-nums;
@@ -88,3 +96,63 @@ body { font-family: system-ui, sans-serif; }
 #stage-hud.panel-open .hud-progress { visibility: hidden; }
 body.no-debug #frame-hud { display: none; }
 body.no-hud #frame-hud, body.no-hud #stage-hud { display: none; }
+
+/* ---- menus, pause, results, settings, loading card (src/menu/ui.ts; sizes: --d px per Slate unit, --f per point) */
+.menu-root { --d: 1px; --f: 1.333px; position: fixed; inset: 0; z-index: 10; pointer-events: none; overflow: hidden;
+  font-family: Inter, system-ui, sans-serif; text-transform: lowercase; color: var(--m-ink); line-height: 1.21;
+  -webkit-font-smoothing: antialiased; user-select: none; }
+.menu-root .curtain { position: absolute; inset: 0; background: var(--m-curtain); transition: none; }
+.menu-root .content { position: absolute; inset: 0; display: flex; align-items: center; justify-content: flex-start;
+  padding: calc(var(--d) * 40) calc(var(--d) * 40) calc(var(--d) * 70) calc(var(--d) * 96); }
+.menu-root.centred .content { justify-content: center; padding: calc(var(--d) * 40); }
+.menu-root .panel { --panel-a: 0.8; background: rgba(var(--m-paper), var(--panel-a)); pointer-events: auto; box-sizing: border-box;
+  max-height: 100%; overflow: hidden; }
+.menu-root .lbl { white-space: pre-wrap; }
+.menu-root .lbl.soft, .menu-root .soft { color: var(--m-ink-soft); }
+.menu-root .lbl.ell { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.menu-root .accent { color: var(--m-accent); }
+.menu-root .row { display: flex; align-items: stretch; cursor: default; box-sizing: border-box; font-weight: 500;
+  background: rgba(39, 39, 43, 0); color: var(--m-ink); transition: background-color 0.12s ease-out, color 0.12s ease-out; }
+.menu-root .row .bar { flex: none; background: var(--m-accent); opacity: 0; transition: opacity 0.12s ease-out; }
+.menu-root .row .inner { flex: 1; display: flex; align-items: center; min-width: 0; }
+.menu-root .row .label { flex: 1; display: flex; align-items: center; white-space: nowrap; min-width: 0; }
+.menu-root .row .badge { margin-left: calc(var(--d) * 10); padding: 0 0.38em 0.05em; border-radius: 0.45em; background: var(--m-accent);
+  color: #fff; font-size: 0.68em; font-weight: 600; line-height: 1.35; }
+.menu-root .row .value { flex: none; text-align: center; font-weight: 400; opacity: 0.85; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; cursor: pointer; }
+.menu-root .row .value:hover { opacity: 1; }
+.menu-root .row .value.stepped { animation: m-step 0.2s ease-out; }
+@keyframes m-step { from { color: var(--m-accent); } }
+.menu-root .row .arrow { flex: none; display: flex; align-items: center; justify-content: center; border-radius: 50%; cursor: pointer; opacity: 0.45; }
+.menu-root .row.focus .arrow, .menu-root .row .arrow:hover { opacity: 1; }
+.menu-root .row .arrow:hover { background: rgba(39, 39, 43, 0.1); }
+.menu-root .row.focus .arrow:hover { background: rgba(255, 255, 255, 0.16); }
+.menu-root .row .arrow.down { background: var(--m-accent) !important; }
+.menu-root .row .arrow svg { width: 100%; height: 100%; }
+.menu-root .row .arrow polyline { fill: none; stroke: currentColor; stroke-width: 1.15; stroke-linecap: round; stroke-linejoin: round; }
+.menu-root .row.focus { background: var(--m-ink); color: rgba(var(--m-paper), 0.92); }
+.menu-root .row.focus .bar { opacity: 1; }
+.menu-root .row.locked .text, .menu-root .row.disabled .text, .menu-root .row.disabled .value { opacity: 0.4; }
+.menu-root .row.pressed { animation: m-press 0.16s ease-out; }
+@keyframes m-press { from { background: #38383d; } }
+.menu-root .row.flash { animation: m-flash 0.55s ease-out; }
+@keyframes m-flash { from { background: rgba(239, 97, 69, 0.85); } }
+.menu-root .flag { display: block; flex: none; }
+.menu-root .hints, .menu-root .music { position: absolute; bottom: calc(var(--d) * 30); font-size: calc(var(--f) * 15); color: rgba(255, 255, 255, 0.85);
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.35); white-space: pre; }
+.menu-root .hints { left: calc(var(--d) * 116); }
+.menu-root .music { right: calc(var(--d) * 60); }
+.menu-root .table .trow { display: flex; align-items: flex-end; }
+.menu-root .table .trow.head { color: var(--m-ink-soft); }
+.menu-root .table .trow.hi { background: var(--m-ink); color: rgba(var(--m-paper), 0.92); font-weight: 600; }
+.menu-root .table .cell { flex: none; white-space: nowrap; }
+.menu-root .table .cell.right { text-align: right; font-variant-numeric: tabular-nums; font-feature-settings: 'tnum' 1; }
+.menu-root .controls .crow { display: flex; padding: calc(var(--d) * 1) 0; }
+.menu-root .controls.centre .crow { justify-content: center; }
+.menu-root .controls .act { text-align: right; font-weight: 500; }
+.menu-root .controls .keys { color: var(--m-ink-soft); }
+.menu-root .loading { position: absolute; inset: 0; background: var(--m-curtain); display: flex; flex-direction: column; align-items: center;
+  justify-content: center; text-align: center; pointer-events: auto; }
+.menu-root .tnum { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum' 1; }
+.menu-root .padlock-note { position: absolute; }
+body.no-hud .menu-root .hints, body.no-hud .menu-root .music { display: none; }

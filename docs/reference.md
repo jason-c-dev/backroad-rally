@@ -7,7 +7,10 @@ For the story of how the game was made, read [the making-of](making-of/README.md
 ## Contents
 
 - [Development](#development)
+- [Menus](#menus)
 - [A stage run](#a-stage-run)
+- [Settings](#settings)
+- [Saves](#saves)
 - [Stages](#stages)
 - [Keys and gamepad](#keys-and-gamepad)
 - [URL options](#url-options)
@@ -34,29 +37,150 @@ npm run test:handling   # headless handling tests (all cars, both surfaces)
 npm run build      # production build into dist/, served under /backroad-rally/
 ```
 
+## Menus
+
+The game opens on the title screen. The menus are in `src/menu/`. They are lowercase
+Inter text on light panels, as in the original.
+
+| Screen | Contents |
+|---|---|
+| Title | career, quick stage, time attack, settings |
+| Career | A card that tells what the career will be. The career comes in slice 10. |
+| Garage | The car and its livery, the spec sheet and the bio, "choose stage", "back" |
+| Stage select | The stage (with its flag), the direction, the time of day, the weather, the best time, "start", "back" |
+| Loading card | The stage name, the location, the length, the direction, the time of day, the weather, the mode, the car and the controls |
+
+- **Quick stage** has half damage (`menu.json` `quick_damage_level`). **Time attack** has no
+  damage. The best-run ghost of time attack comes in slice 10.
+- **Time of day and weather.** "(default)" is the stage's own choice for the direction.
+- **Locked cars and liveries.** A fresh save has the swift and the pip (`career.json`
+  `start_cars`). The other cars and the bonus liveries are locked, as in the original: the
+  car is out of focus under a turning padlock, and "choose stage" is refused. The career
+  unlocks them (slice 10). `?unlockall` unlocks all of them for development.
+- **The backdrop** is a live diorama: the stage of the selected location, with the selected
+  car parked on the road and a camera that turns around it (`menu.json` `diorama`). The car,
+  the livery and the time of day change at once. A different location or weather loads the
+  page again behind the curtain, with the menu as it was. The diorama has no crowd, no
+  effects and no engine sound.
+- **Music.** The menu tracks play (`audio_mix.json` `menu`). The song continues when the
+  backdrop changes. The bottom right shows the song.
+- **Input.** Keyboard, mouse and gamepad move one highlight:
+
+| Action | Keyboard | Mouse | Gamepad |
+|---|---|---|---|
+| Choose a row | Up / Down (or W / S) | Hover, or the wheel | D-pad or left stick |
+| Change a value | Left / Right (or A / D) | Click the value or ‹ ›, right click for −1, hold an arrow to repeat | D-pad or left stick |
+| Select | Enter or Space | Click | A |
+| Back | Esc or Backspace | | B |
+| Next song | . (, for the previous) | | Right shoulder |
+
+### Page flow
+
+The menus and a stage run are separate page loads. When you start a stage, quit a stage
+or change the backdrop, the page loads again. Thus the old stage releases all its memory.
+`sessionStorage` keeps the screen, the selections and the song for the next page. A stage
+run from the menus has an address like
+`?mode=quick&stage=wales&car=pip&livery=1&cond=stage&weather=stage`. An address with
+`?stage=`, `?car=` or `?autopilot=` and no `?mode=` goes directly to the stage, as before
+the menus (for development and the check scripts).
+
 ## A stage run
 
-The game opens on the first stage, finland. N moves to the next stage, and Shift+N to
-the previous stage. B runs the stage in the other direction. A run has these steps:
+A run has these steps:
 
-1. An intro card shows.
-2. A 3-2-1 countdown starts. The clock starts on "go".
-3. You drive about 3 km to the finish arch.
-4. The result shows.
+1. The loading card stays until the stage draws steadily: 45 frames in sequence under
+   25 ms (at least 1.5 s, at most 6 s). Then it fades out in 0.6 s. The simulation does not
+   start before this.
+2. An intro card shows for 2.5 s.
+3. A 3-2-1 countdown starts. The clock starts on "go".
+4. You drive about 3 km to the finish arch.
+5. The car coasts for 3 s. Then the results show: the time, the penalties, the total and,
+   in quick stage and time attack, the best time ("new best time" when you beat it). Select
+   "restart stage", "choose another stage" or "main menu".
+
+**Pause.** Esc or the gamepad's Start opens the pause menu: resume, restart stage, recover
+car (+5 s), settings, quit to menu. The pause stops the simulation, the stage clock, the
+effects and all sounds except the music and the menu sounds.
 
 These rules apply during the run:
 
 - The car can go more than 12 m off the road for 0.4 s. Then the game puts it back on
   the road a few metres behind. The car is stopped, and you get a +5 s penalty.
 - R (recover) does the same, with the same +5 s penalty.
-- Enter restarts the stage.
+- Enter restarts the stage (outside the menus).
 - A sufficiently hard crash wrecks the car. The car coasts to a stop, and the run ends as
   "dnf · terminal damage".
+
+## Settings
+
+The settings screen is in the title menu and in the pause menu
+(`src/menu/settingsPanel.ts`). A change applies at once and is saved at once.
+
+| Page | Row | Values (default) |
+|---|---|---|
+| settings | camera | near / default / far / top (default) |
+| | field of view | 30–56° in steps of 2 (the camera's own, 40°) |
+| | stability assist | off–100% in steps of 25 (100%) |
+| | counter-steer assist | off–100% in steps of 25 (100%) |
+| | traction assist | on / off (on) |
+| | speed units | km/h / mph |
+| | speed display | number / dial |
+| | hud size | 80–130% (100%) |
+| | ghost of best run | on / off (on). Slice 10 draws the ghost. |
+| | rival ghosts | off / 3 / all (3). It cannot change until slice 10. |
+| sound | master, music, effects, engine, tyres and surface, crowd, ambience, weather, interface | off–100% in steps of 10 (master 80%, the groups 100%); sound on / muted |
+| display & graphics | display | window / fullscreen |
+| | graphics quality | auto / low / medium / high (auto) |
+| | frame-rate limit | 30 / 60 / 120 / 144 fps / uncapped (60) |
+| | render resolution | auto / 100% to 50% in steps of 5 (auto) |
+| | draw distance | near / medium / far / max (far) |
+
+- The assists multiply the car's own assist values (`cars_tuning.json`). At 100%, the car
+  is the same as in the handling tests.
+- **Graphics quality.** Auto is the adaptive ladder (see
+  [Auto quality](#auto-quality)). The original's highest tier, "epic", is high here: the
+  web version has no higher tier.
+- **Render resolution and draw distance are separate knobs.** Render resolution draws fewer
+  pixels, and the browser stretches them to the window. "Auto" lets the quality ladder set
+  it. Draw distance sets how far trees, shrubs and plants show.
+- **Frame-rate limit.** The game loop skips the display's frames that come too early. Auto
+  quality then counts a frame as slow only when it is later than the limit allows.
+- **The debug panel** (F3) is off by default.
+- The original had four volume rows on page 1. The web version shows all nine mix groups
+  on their own page.
+
+The settings stay in the browser (`src/settings.ts`), with one `localStorage` key for each
+section:
+
+| Key | Contents |
+|---|---|
+| `backroad-rally.hud` | `v`, units, speed display, HUD size, the debug panel |
+| `backroad-rally.game` | camera, field of view, stability, counter-steer, traction assist, ghost, rival ghosts |
+| `backroad-rally.display` | quality, frame-rate limit, render resolution, draw distance |
+| `backroad-rally.audio` | master, mute, the volume of each group |
+| `backroad-rally.run` | the last selections: stage, direction, time of day, weather, car, livery |
+
+## Saves
+
+The save is in `src/game/save.ts`, under the `localStorage` key `backroad-rally.save`. It
+has a version number (now 1).
+
+| Field | Contents |
+|---|---|
+| `best` | The best total time (penalties included) for each mode, stage, direction, car and weather, for example `quick:finland:fwd:swift:clear`, with the car and the date. The original kept one time for each car group. |
+| `unlocks` | `groups`, `cars`, and `liveries` (the cars with an unlocked bonus livery) |
+| `career` | The career slot for slice 10 (empty) |
+
+- A missing, unreadable or damaged save loads as the defaults. The game keeps each field
+  that is still valid.
+- An older save is migrated. A save from a newer version keeps the fields that this version
+  knows.
+- Only finished runs in quick stage and time attack record a best time. A retirement does not.
 
 ## Stages
 
 There are six point-to-point stages of about 3 km. You can drive each stage forward or
-in reverse. Until there is a stage select, use `?stage=` and `?dir=reverse`, or N and B
+in reverse. Select them in the stage select, or use `?stage=` and `?dir=reverse`, or N and B
 in the game. The game downloads only the stage that you select. A stage is 4.4–5.1 MB:
 the terrain, its props and plants, the instance table and the road.
 
@@ -92,6 +216,7 @@ the terrain, its props and plants, the instance table and the road.
 | A / D | Steer |
 | Space | Handbrake |
 | R | Recover (+5 s) |
+| Esc | Pause menu |
 | T | Traction assist on or off |
 | C | Camera |
 | L | Livery |
@@ -105,8 +230,8 @@ the terrain, its props and plants, the instance table and the road.
 | M | Mute |
 | V | The volume panel |
 | . and , | Next and previous music track |
-| N / Shift+N | Next / previous stage |
-| B | The other direction |
+| N / Shift+N | Next / previous stage (development) |
+| B | The other direction (development) |
 
 A gamepad also works:
 
@@ -117,6 +242,7 @@ A gamepad also works:
 | L1 | Handbrake |
 | Y | Recover |
 | X | Camera |
+| Start | Pause menu |
 
 ## URL options
 
@@ -124,14 +250,19 @@ Add the options to the page address, for example `?car=pip&cond=night`.
 
 | Option | Effect |
 |---|---|
-| `?car=<id>` | The car: swift, pip, lama, quint or kaze |
+| `?car=<id>` | The car: swift, pip, lama, quint or kaze. Goes directly to the stage. |
+| `?livery=<n>` | The livery (0 is the first) |
+| `?mode=quick\|attack` | A stage run from the menus: quick stage (half damage) or time attack (no damage). The results offer "choose another stage", and a finish records the best time. |
+| `?menu` | Open the menus, also with stage options in the address |
+| `?unlockall` | For development: unlock all cars and bonus liveries in the save |
+| `?fps=<n>` | Frame-rate limit for one visit (0 = uncapped). Runs with `?autopilot` or `?timescale` are always uncapped. |
 | `?stage=<id>` | The stage: finland (the default), japan, alps, wales, arizona or vermont |
 | `?dir=reverse` | Run the stage backwards |
 | `?stage=test` | The flat handling test bench, not a stage |
-| `?draw=near\|medium\|far\|max` | Draw distance: ×1, ×1.5, ×2 or ×3 the base fade bands. The default is far. |
+| `?draw=near\|medium\|far\|max` | Draw distance for one visit: ×1, ×1.5, ×2 or ×3 the base fade bands. The default is the setting (far). |
 | `?cond=morning\|afternoon\|sunset\|night\|fog` | Time of day. The default is afternoon. `?cond=stage` uses the stage's own choice for each direction (finland: sunset forward, afternoon in reverse). |
 | `?weather=clear\|rain\|snow\|stage` | The weather. The default is the last choice of the J key, else clear. `?weather=stage` uses the stage's own weather for each direction: alps forward snow, wales forward rain, vermont reverse rain, else clear. |
-| `?quality=auto\|high\|medium\|low` | Render quality. The default is auto: it measures frame times and selects the tier that holds 60 fps (see [Quality tiers and performance](#quality-tiers-and-performance)). |
+| `?quality=auto\|high\|medium\|low` | Render quality for one visit. The default is the setting, auto: it measures frame times and selects the tier that holds 60 fps (see [Quality tiers and performance](#quality-tiers-and-performance)). |
 | `?scale=0.5..1` | Render scale: the game draws a smaller canvas, and the browser stretches it to the window. This pins the scale, also under auto. |
 | `?upscale=fsr` | With a render scale below 1, upscale with FSR 1 in the post chain. This is sharper, but costs more. |
 | `?post=0` | No post-processing: the scene goes straight to the screen at the same exposure. P toggles it. |
@@ -519,11 +650,8 @@ shortest side of the window and by the HUD size setting.
 
 ### Settings
 
-- The settings stay in the browser (`src/settings.ts`), with one `localStorage` key for
-  each section:
-  - `backroad-rally.hud`: units, speed display, HUD size and the debug panel;
-  - `backroad-rally.audio`: the volumes.
-- U, I and F3 change and save the settings. The URL options apply to one visit only.
+U, I and F3 change and save the HUD settings. The settings screen has the same rows (see
+[Settings](#settings)). The URL options apply to one visit only.
 
 ### Check
 
@@ -675,6 +803,12 @@ The check scripts use headless Chrome through playwright-core:
   the time for each car and direction, the resets, the spins and the surfaces under the
   wheels. With `--perf --size 3840x1600 --seconds 60`, it runs at real time and prints
   frame times, draw calls, visible instances and the cost of the instance update.
+- `node tools/check/flow.mjs [--size 1920x1080] [--input keys|pad|mouse] [--webgpu] [--noshot] [--headed]`
+  walks the game: title, garage (also a locked car), stage select (also a backdrop change),
+  the loading card, the stage, pause, the three settings pages, the results, back to the
+  stage select and the title. It saves a screenshot of each screen, checks that the clock
+  stops during the pause, and prints the console errors. `--input pad` uses a simulated
+  gamepad. With `--webgpu --noshot` it walks on WebGPU in headless Chrome.
 - `node tools/check/rock.mjs [--webgl] [--car swift] [--kmh 40] [--meshes SM_Rock_B,SM_Boulder_A]`
   drives into the largest roadside rocks of each type at 40 km/h. It checks that the car
   stops at each rock, does not fly up, and can reverse away. It saves a screenshot at

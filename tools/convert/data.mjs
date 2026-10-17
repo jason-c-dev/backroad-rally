@@ -34,6 +34,11 @@ const FILES = [
   'damage.json',
   'hud.json',
   'weather.json',
+  // slice 9: the menus (stage names, flags, the diorama, the loading card's controls), the garage spec sheets, and
+  // the career's start cars and season unlocks (the garage's lock lines; slice 10 uses the rest)
+  'menu.json',
+  'garage.json',
+  'career.json',
   ...['swift', 'pip', 'lama', 'quint', 'kaze'].map((id) => `cars/${id}.json`),
 ];
 

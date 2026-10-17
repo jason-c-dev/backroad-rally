@@ -42,7 +42,7 @@ const errors = [];
 page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
 page.on('pageerror', (e) => errors.push(String(e)));
 await page.goto(`${base}?${q}`);
-await page.waitForSelector('#frame-hud:not(:empty)', { timeout: 60000 });
+await page.waitForSelector('#frame-hud:not(:empty)', { timeout: 60000, state: 'attached' });
 await page.waitForFunction(() => window.__br?.level?.run?.phase === 'running', null, { timeout: 30000 });
 
 // the rocks to try: biggest first, 1-6 m outside the road edge, with a clear run at them from 14 m
