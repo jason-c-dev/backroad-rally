@@ -17,6 +17,42 @@ next agent could read it, run it again and change it.
 Claude Code ran in its "auto" permission mode. Allow rules in the project settings let
 the long build and cook commands run without a prompt.
 
+## How the developer works with Claude
+
+The developer uses the same setup for all projects, not only for this game.
+
+| Tool | Maker | Use |
+|---|---|---|
+| [Omarchy](https://omarchy.org/) | Omarchy project | The desktop: Arch Linux with the Hyprland window manager, on each computer |
+| [Herdr](https://herdr.dev/) | Herdr project | A terminal workspace for AI agents. Each Claude Code session has its own pane, and Herdr shows the state of each agent: working, blocked on a question, or done. |
+| [claude-code-status](https://github.com/jason-c-dev/claude-code-status) | The developer | A status line below the Claude Code prompt. It shows the computer, the folder, the model, the git branch, the context fill and the session cost. |
+| [savvy-progress](https://github.com/johnnyvizz/claude-kit/tree/main/plugins/savvy-progress) | claude-kit | A Claude Code mod. It shows a progress bar above the prompt and a live panel of the background agents, with their model, progress, context and estimated cost. |
+| [Obsidian](https://obsidian.md/) | Obsidian | A shared notes vault about the computers and the tools. Each Claude reads it first and writes what it learns, so the next session does not find the same problem again. |
+| Claude Code skills | | Small instruction packs, for example for Herdr, for the Omarchy configuration and for the notes vault |
+
+### A fleet of agents
+
+One Claude Code session is the **orchestrator**. It talks with the developer, writes a
+brief for each slice of work and starts a **background agent** for it. The developer
+can see the agents in the progress panel while they work. Each agent ends with a
+report. The orchestrator reads the report, examines the screenshots, runs the tests
+and makes the commit. The orchestrator does not read large files itself, so its
+context stays small for many days.
+
+When the developer wants to see or control a second session, Herdr opens it in a new
+pane. Examples are a long test run, or a second Claude on a different task. A
+background agent is better when only the orchestrator needs the result.
+[How Claude Code did the work](05-how-claude-code-worked.md) gives the details.
+
+### Some rules
+
+- The developer gives the ideas and makes the decisions. Claude asks when a decision
+  belongs to the developer.
+- Each change goes through a pull request. No session pushes to `main`.
+- Before each push, Claude checks the change for personal data, because this
+  repository is public.
+- Each Claude writes durable facts to the notes vault, not only to its own memory.
+
 ## The Unreal Engine game
 
 | Tool | Maker | Use |
@@ -34,7 +70,7 @@ the long build and cook commands run without a prompt.
 |---|---|---|
 | [three.js](https://threejs.org/) r186 | three.js authors | The renderer: `WebGPURenderer` with TSL node materials. It falls back to WebGL2. |
 | [Rapier](https://rapier.rs/) 0.21 | Dimforge | Physics: the car body, the terrain and the colliders. The vehicle model is our own code on top. |
-| [Vite](https://vite.dev/) 8 and TypeScript | | The build. About 10,200 lines of TypeScript in `src/`. |
+| [Vite](https://vite.dev/) 8 and TypeScript | | The build. About 17,500 lines of TypeScript in `src/`. |
 | Vitest | | Unit tests |
 | Playwright with Chrome | | Headless browser checks: screenshots, frame times, audio recordings |
 | glTF Transform and meshoptimizer | | GLB compression for the web |
