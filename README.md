@@ -1,5 +1,9 @@
 # backroad rally
 
+<p align="center">
+  <a href="https://jason-c-dev.github.io/backroad-rally/"><img alt="Play in your browser" src="https://img.shields.io/badge/%E2%96%B6%20PLAY%20HERE-in%20your%20browser-2ea44f?style=for-the-badge&labelColor=1b1916" height="56"></a>
+</p>
+
 [![Play](https://img.shields.io/badge/play-in_browser-2ea44f?logo=googlechrome&logoColor=white)](https://jason-c-dev.github.io/backroad-rally/)
 [![Pages deploy](https://img.shields.io/github/actions/workflow/status/jason-c-dev/backroad-rally/pages.yml?branch=main&label=pages&logo=github)](https://github.com/jason-c-dev/backroad-rally/actions/workflows/pages.yml)
 ![Status](https://img.shields.io/badge/status-playable-2ea44f)
