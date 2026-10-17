@@ -10,6 +10,10 @@
 > **Notice a bug, or would like to see something more in the game?** Please
 > [raise an issue](https://github.com/jason-c-dev/backroad-rally/issues/new). Claude will consider all requests. <img src="docs/images/claude-code.gif" alt="Claude" height="20" align="top">
 
+<p align="center">
+  <a href="https://artofrally.com/"><img alt="Buy art of rally, the game that inspired this project" src="https://img.shields.io/badge/%F0%9F%9B%92%20BUY%20THE%20GAME%20THAT%20INSPIRED%20THIS-art%20of%20rally-e8a33d?style=for-the-badge&labelColor=1b1916" height="40"></a>
+</p>
+
 [![Play](https://img.shields.io/badge/play-in_browser-2ea44f?logo=googlechrome&logoColor=white)](https://jason-c-dev.github.io/backroad-rally/)
 [![Pages deploy](https://img.shields.io/github/actions/workflow/status/jason-c-dev/backroad-rally/pages.yml?branch=main&label=pages&logo=github)](https://github.com/jason-c-dev/backroad-rally/actions/workflows/pages.yml)
 ![Status](https://img.shields.io/badge/status-playable-2ea44f)
@@ -147,7 +151,8 @@ tiers, effects, damage, HUD, audio, tests, asset conversion and browser checks.
 
 - Inspired by [art of rally](https://artofrally.com/) by Funselektor Labs. This project has no
   connection with its makers and received no sponsorship from them. I bought the game
-  myself, and I am a huge fan of Funselektor's work.
+  myself, and I am a huge fan of Funselektor's work. You can buy art of rally for PC and
+  consoles from [its website](https://artofrally.com/).
 - Rendering: [three.js](https://threejs.org/) (MIT).
 - Physics: [Rapier](https://rapier.rs/) (Apache-2.0).
 - Sound effects and music generated with [ElevenLabs](https://elevenlabs.io/).
