@@ -5,7 +5,7 @@ import * as THREE from 'three/webgpu';
 import { CSMShadowNode } from 'three/examples/jsm/csm/CSMShadowNode.js';
 import { CONDITIONS, resolveCondition, whiteBalance, type Condition, type ConditionsJson } from './conditions';
 import { fogU, heightFog } from './fog';
-import { Post, postU, type DofConfig } from './post';
+import { Post, postU, SEAM_TEST, type DofConfig } from './post';
 import { QUALITY, type Quality } from './quality';
 import { U, TINTED } from './uniforms';
 import { interpTo } from '../camera/chaseCamera';
@@ -263,7 +263,7 @@ export class Look {
     fogU.dirExponent.value = f.dirExponent;
     fogU.dirStart.value = f.dirStart;
     fogU.toSun.value.copy(c.sun.dir).negate();
-    this.scene.background = f.inscatter.clone().multiplyScalar(1);
+    this.scene.background = SEAM_TEST ? new THREE.Color(1, 0, 1) : f.inscatter.clone().multiplyScalar(1);
     // post
     const p = c.post;
     postU.exposure.value = Math.pow(2, p.exposureBias) * this.calib.exposure * cc.exposure * wc.exposure;

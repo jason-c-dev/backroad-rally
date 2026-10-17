@@ -11,7 +11,7 @@
 import * as THREE from 'three/webgpu';
 import {
   Fn, abs, dot, exp, float, frameId, log2, max, min, mix, pass, perspectiveDepthToViewZ, pow, rand, rtt, step,
-  saturate, smoothstep, uniform, uv, vec2, vec3, vec4,
+  saturate, select, smoothstep, uniform, uv, vec2, vec3, vec4,
 } from 'three/tsl';
 import { ao } from 'three/examples/jsm/tsl/display/GTAONode.js';
 import { bloom } from 'three/examples/jsm/tsl/display/BloomNode.js';
@@ -72,6 +72,13 @@ export const postU = {
 };
 
 const BLOOM_SCALE = 0.27;
+
+/**
+ * Dev (tools/check/seam.mjs): ?seamtest paints the background magenta, and every pixel at the far plane pure magenta
+ * at the end of the chain (no fog, blur or tone curve on it), so a gap in the ground where the background shows
+ * through is one exact colour that a script can count.
+ */
+export const SEAM_TEST = typeof location !== 'undefined' && new URLSearchParams(location.search).has('seamtest');
 
 // ---- the original engine's filmic tonemapper (defaults: slope 0.88, toe 0.55, shoulder 0.26,
 // black clip 0, white clip 0.04), applied per channel in ACES AP1 after the grade, blended with the
@@ -228,6 +235,8 @@ export class Post {
       this.owned.push(aa);
       out = aa;
     }
+    // dev: every pixel the scene left empty (depth at the far plane) is pure magenta, after all the filters
+    if (SEAM_TEST && !(webgpu && msaa > 0)) out = select((depth.r as unknown as N).greaterThanEqual(1), vec4(1, 0, 1, 1), out as THREE.Node<'vec4'>);
     this.pipeline = new THREE.RenderPipeline(renderer, out as THREE.Node<'vec4'>);
     // the pipeline's own output transform encodes sRGB; the tone mapping is done above
     this.pipeline.outputColorTransform = true;

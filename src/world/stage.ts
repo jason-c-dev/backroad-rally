@@ -8,6 +8,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { loadGlb, publicUrl } from '../data';
 import { Road, type RoadData } from '../sim/road';
+import { weldSeams, type SeamPart } from './seams';
 import type { SurfaceQuery } from '../sim/vehicle';
 import type { Surface } from '../sim/tuning';
 import { instanceMaterials, propMaterials, terrainMaterials } from '../look/materials';
@@ -85,6 +86,35 @@ const slotName = (m: THREE.Material) => m.name.replace(/\.\d+$/, '');
  * instance matrices in a uniform block named after the node, so every chunk compiled its own
  * vertex program (2200 programs, 8-45 s of hitches).
  */
+
+/**
+ * A terrain node's positions in world space (Float32), its transforms cleared: the values the colliders were always
+ * built from. weldSeams (seams.ts) then gives the copies of a tile-edge vertex one value, and with one (identity)
+ * transform for every tile the GPU puts both copies on the same spot. With a transform per tile, each tile's own
+ * model-view matrix would round them differently.
+ */
+function bakeToWorld(node: THREE.Object3D, parts: THREE.Mesh[]): void {
+  const v = new THREE.Vector3();
+  for (const m of parts) {
+    const pos = m.geometry.getAttribute('position');
+    const f = new Float32Array(pos.count * 3);
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld);
+      f[i * 3] = v.x;
+      f[i * 3 + 1] = v.y;
+      f[i * 3 + 2] = v.z;
+    }
+    m.geometry.setAttribute('position', new THREE.BufferAttribute(f, 3));
+    m.geometry.computeBoundingBox();
+    m.geometry.computeBoundingSphere();
+  }
+  node.traverse((o) => {
+    o.position.set(0, 0, 0);
+    o.quaternion.identity();
+    o.scale.set(1, 1, 1);
+  });
+  node.updateMatrixWorld(true);
+}
 
 /** COLOR_0 is RGBA (alpha = sway weight on vegetation): keep RGB as the colour, alpha as `sway`. */
 function splitColour(g: THREE.BufferGeometry): void {
@@ -226,8 +256,10 @@ export class Stage {
   stats = { instances: 0, visible: 0, drawn: 0, colliders: 0, groups: 0 };
   /** Instance colliders by catalog category (tools/check reads it). */
   instanceColliders: Record<string, number> = {};
-  /** Load and build costs (ms): fetch + decode, terrain meshes, Rapier colliders (tiles, instances), instances. */
-  timings = { fetch: 0, terrain: 0, tileColliders: 0, instances: 0, instanceColliders: 0, warmup: 0 };
+  /** Load and build costs (ms): fetch + decode, terrain meshes, Rapier colliders (tiles, instances), tile seams, instances. */
+  timings = { fetch: 0, terrain: 0, tileColliders: 0, seams: 0, instances: 0, instanceColliders: 0, warmup: 0 };
+  /** Tile-edge vertices moved onto their copy in the next tile at load (seams.ts), and the largest move (m). */
+  seams = { moved: 0, maxMove: 0 };
 
   private constructor(readonly json: StageJson, readonly bin: Float32Array, readonly catalog: Record<string, CatalogEntry>,
     readonly runtime: StageRuntimeJson) {
@@ -272,6 +304,7 @@ export class Stage {
       node.traverse((o) => {
         if ((o as THREE.Mesh).isMesh) parts.push(o as THREE.Mesh);
       });
+      bakeToWorld(node, parts);
       // colliders: one trimesh per surface of the node (water has none: the ford is drag, not a floor)
       if (colliding.has(node.name)) {
         const bySurface = new Map<Surface, { verts: number[]; idx: number[] }>();
@@ -308,6 +341,20 @@ export class Stage {
         m.castShadow = !node.name.includes('Backdrop');
       }
     }
+    // close the cracks between tiles (and bridges) in the drawn meshes only: the colliders above keep the
+    // positions as converted, so the physics doesn't change (seams.ts)
+    const ts = performance.now();
+    const seamParts: SeamPart[] = [];
+    nodes.forEach((node, n) => {
+      if (node.name.includes('Backdrop')) return;
+      node.traverse((o) => {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh) return;
+        seamParts.push({ pos: m.geometry.getAttribute('position').array as Float32Array, node: n });
+      });
+    });
+    this.seams = weldSeams(seamParts);
+    this.timings.seams = performance.now() - ts;
     this.group.add(...nodes);
     // anything else the wheels touch (instance colliders, gantries) counts as grass, like UE's default
     this.surfaceAt = (collider) => this.colliderSurface.get(collider.handle) ?? 'grass';
