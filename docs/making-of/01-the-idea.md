@@ -27,6 +27,14 @@ The developer is a big fan of art of rally and of the work of its makers, Funsel
 Labs. The developer bought the game. This project has no connection with Funselektor,
 and it got no sponsorship from them.
 
+art of rally was inspiration only. The goal was to test Claude Code in a full game
+pipeline, with a game in this style. Nothing came from the game itself:
+
+- No agent opened, extracted or reverse-engineered the files or the binaries of art of
+  rally.
+- No code, mesh, texture, sound or music came from it.
+- The research used only public screenshots and descriptions, as a visual reference.
+
 backroad rally is inspired by art of rally. It copies no names, logos, music or assets.
 The rules for the design were these:
 
@@ -38,8 +46,9 @@ The rules for the design were these:
 
 ## Research before design
 
-Before the design, three research agents studied the inspiration. They collected 10 to
-15 reference screenshots and wrote notes about these subjects:
+Before the design, three research agents studied the inspiration from public sources
+only. They collected 10 to 15 reference screenshots and wrote notes about these
+subjects:
 
 - the gameplay systems;
 - the cars and the stages;
