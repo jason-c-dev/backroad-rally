@@ -507,6 +507,7 @@ Add the options to the page address, for example `?car=pip&cond=night`.
 | `?post=0` | No post-processing: the scene goes straight to the screen at the same exposure. P toggles it. |
 | `?ao=0`, `?dof=0`, `?bloom=0`, `?msaa=0`, `?cascades=1`, `?hlshadow=0`, `?shadowmap=1024`, `?shadowfar=100` | Switch off or reduce one effect, on top of the quality preset |
 | `?hide=tree,grass`, `?lodcuts=50,120,200`, `?lodblend=0.1`, `?shadowrange=180`, `?lookoff=fog,mask,lit` | For development: hide instance categories, move the vegetation detail switches, and switch off shader features to measure their cost |
+| `?seamtest` | For development: the background is magenta, and each pixel with nothing drawn on it is pure magenta after the post-processing. `tools/check/seam.mjs` counts these pixels. |
 | `?damage=0\|0.5\|1` | Damage level: 1 is full (the default), 0.5 is half, 0 is off. With 0, hits still make sparks and sound. |
 | `?startdamage=0.8` | For development: start the first run with damage (smoke from 0.35, fire from 0.7) |
 | `?units=kmh\|mph`, `?speedo=number\|dial`, `?hud=80..130` | HUD speed units, speed display and HUD size (%) for this visit. The game does not save them. |
@@ -1063,6 +1064,15 @@ site does not need it.
 
 The Blender scripts open the source files as read-only and never save them.
 
+The converter quantizes each terrain tile on its own grid. Thus the two copies of a
+vertex on the edge between two tiles can be up to 2 cm apart, and the background shows
+through a crack: a thin light line along the tile edge (also down the centre of a road
+that follows a tile edge). The game closes these cracks when it loads a stage
+(`src/world/seams.ts`). It moves the tiles into world coordinates, and gives each copy of
+an edge vertex the value of the first copy. It does this to the drawn meshes after it
+makes the colliders, so the physics does not change. This takes about 35 ms.
+`test/stageSeams.test.ts` and `tools/check/seam.mjs` find such cracks.
+
 ## Checks in a browser
 
 ### Set up
@@ -1148,6 +1158,16 @@ The check scripts use headless Chrome through playwright-core:
 - `node tools/check/playthrough.mjs [--stage wales]` does the run actions on one quick
   stage: the countdown, driving, recover, restart (the rival ghosts must stay), pause and
   resume, and a DNF with its results.
+- `node tools/check/seam.mjs [--quality low,medium,high] [--size 3840x1600] [--yaws 12] [--menu 0] [--stages finland,japan] [--dirs fwd,rev] [--cond night] [--weather rain] [--webgpu] [--headed] [--dpr 1.6] [--look]`
+  finds cracks in the ground. It opens the pages with `?seamtest`. In the menus, it turns
+  the orbit camera around the car in steps (title view, then garage view). On each stage
+  it takes frames while the autopilot drives. For each frame, it counts the magenta
+  pixels in thin lines and specks (cracks). Large areas of magenta are open sky between
+  the trees, and the script does not count them. It saves the worst frames with a mask
+  (cracks white, sky grey). The result must be zero cracks. A crack that is thinner than a
+  pixel and that MSAA blends with the road does not count, so also look at the saved
+  frames. `--look` takes the same frames without `?seamtest`, for screenshots. `--webgpu`
+  needs `--headed`: in headless Chrome the WebGPU frames are blank.
 - `node tools/check/perf.mjs [--gpu igpu|dgpu] [--sizes 1920x1080,3840x1600] [--seconds 45] [--configs "quality=auto;quality=low"]`
   drives the stage with the autopilot at real time. For each configuration, it prints
   these values:
