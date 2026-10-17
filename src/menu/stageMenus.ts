@@ -6,6 +6,7 @@ import { formatTime } from '../game/stageRun';
 import { formatGap, ordinal, type TableRow } from '../game/career';
 import { MenuController, Row, controlsHint, el, firstPad, label, panel, setScale, spacer, table, u, type Screen } from './ui';
 import { settingsScreen, type SettingsHost } from './settingsPanel';
+import { busy, handOff, setBusyText, takeBoot } from './busy';
 
 /** The longest the curtain waits for auto quality to settle (s). */
 const HOLD_MAX_S = 14;
@@ -59,6 +60,12 @@ export class StageMenus {
   readonly ctl: MenuController;
   private curtainEl: HTMLElement;
   private loadingEl: HTMLElement;
+  /** The loading indicator: in the card, else alone on the curtain (src/menu/busy.ts). */
+  private busyEl: HTMLElement;
+  /** The last page handed its indicator over: show this page's at once. */
+  private busyNow: boolean;
+  /** Leaving for another page: the curtain stays up. */
+  private leaving = false;
   /** 'pause' and 'settings' pause the run; 'results' doesn't (the run has ended). */
   open: 'pause' | 'settings' | 'results' | null = null;
   /** The curtain: 1 while the stage warms up, then fading; ready once it is gone. */
@@ -83,6 +90,8 @@ export class StageMenus {
     const content = el('div', 'content', this.root);
     this.curtainEl = el('div', 'curtain', this.root);
     this.loadingEl = el('div', 'loading', this.root);
+    this.busyNow = takeBoot();
+    this.busyEl = busy(this.loadingEl, 'loading', this.busyNow);
     this.ctl = new MenuController(content);
     setScale(this.root);
     addEventListener('resize', () => setScale(this.root));
@@ -99,6 +108,33 @@ export class StageMenus {
 
   showCard(card: HTMLElement): void {
     this.loadingEl.replaceChildren(card);
+    const b = card.querySelector<HTMLElement>('.busy');
+    if (b) {
+      this.busyEl = b;
+      if (this.busyNow) b.classList.add('now');
+    }
+  }
+
+  /** What the indicator says ("loading stage", "preparing graphics"). */
+  setBusy(text: string): void {
+    setBusyText(this.busyEl, text);
+  }
+
+  /**
+   * Leaving for another page (quit, the career's next stage): the curtain comes down at once over the run, with the
+   * card if given and the indicator showing, and the next page starts with them (src/menu/busy.ts handOff).
+   */
+  leave(card?: HTMLElement): void {
+    this.leaving = true;
+    this.ready = false;
+    this.ctl.active = false;
+    this.loadingEl.replaceChildren(...(card ? [card] : []));
+    this.busyEl = card?.querySelector<HTMLElement>('.busy') ?? busy(this.loadingEl, 'loading');
+    this.busyEl.classList.add('now');
+    this.curtain = 1;
+    this.curtainEl.style.opacity = this.loadingEl.style.opacity = '1';
+    this.curtainEl.style.display = this.loadingEl.style.display = '';
+    handOff(this.root);
   }
 
   /**
@@ -107,6 +143,7 @@ export class StageMenus {
    * the run may go.
    */
   frame(dt: number, frameMs: number, hold = false): boolean {
+    if (this.leaving) return false;
     const c = this.cfg;
     if (!this.fadingNow) {
       this.warm += dt;

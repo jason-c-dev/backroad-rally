@@ -35,6 +35,7 @@ import { Menu, menuHref, type MenuDiorama } from './menu';
 import { putMenuState, takeMenuState } from './nav';
 import { Padlock } from './padlock';
 import type { SettingsHost } from './settingsPanel';
+import { busy, nextPaint } from './busy';
 
 const HANDBRAKE: DriverInput = { throttle: 0, brake: 0, steer: 0, digitalSteer: false, handbrake: true };
 
@@ -192,11 +193,18 @@ export async function runMenu(params: URLSearchParams): Promise<void> {
   padlock.forceWebGL = !(renderer.backend as { isWebGPUBackend?: boolean }).isWebGPUBackend;
   padlock.fallbackScene = scene;
 
+  // the garage: a loading indicator over the car while another car's model loads (the menu stays live)
+  const carBusy = busy(menu.root, 'loading car');
+  carBusy.classList.add('car');
+  carBusy.style.display = 'none';
+  let carLoading = false;
   const placeCar = async (id: string, livery: number) => {
     const token = ++carToken;
+    carLoading = true;
     const info = (await loadCar(id)) as CarInfo;
     const model = await loadCarModel(info);
     if (token !== carToken) return;
+    carLoading = false;
     model.setLivery(info.liveries[Math.min(livery, info.liveries.length - 1)]);
     if (car) {
       world.removeRigidBody(car.vehicle.body);
@@ -297,6 +305,9 @@ export async function runMenu(params: URLSearchParams): Promise<void> {
   orbit.update(0, car!.sim.renderPos, carYaw());
   stage.updateInstances(orbit.camera.position, true, car!.sim.renderPos);
   lk.update(0, car!.sim.renderPos, innerWidth, innerHeight);
+  // the shaders build now (the main thread is busy for a second or more): say so first
+  menu.setBusy('preparing graphics');
+  await nextPaint();
   stage.warmup(() => lk.render());
   /** The tier the warm-up built for: auto quality settling on another draws everything again, behind the curtain. */
   let warmedTier = lk.qualityName;
@@ -333,8 +344,10 @@ export async function runMenu(params: URLSearchParams): Promise<void> {
     // the curtain (UE: hold until 15 steady frames after 0.8 s, at most 5 s; fade 0.8 s; a swap raises it in 0.3 s)
     if (pending) {
       curtain = Math.min(1, curtain + dt / 0.3);
+      menu.setBusy('loading');
       if (curtain >= 1 && now - pendingSince >= dio.swap_debounce_s * 1000) {
         putMenuState(menu.state());
+        menu.handOff();
         location.replace(menuHref(params));
         pending = null;
         renderer.setAnimationLoop(null);
@@ -381,6 +394,14 @@ export async function runMenu(params: URLSearchParams): Promise<void> {
     lk.dofOverride = { fstop: 8 + (lockCfg.fstop - 8) * k, past: (lockCfg.focus_past_cm / 100) * k };
     padlock.visible = locked && curtain < 0.5;
     padlock.update(dt);
+    // display: none when no car loads (no animation runs); a new display restarts its 0.25 s delay
+    const carWait = carLoading && curtain < 0.5;
+    if (carBusy.style.display !== (carWait ? '' : 'none')) carBusy.style.display = carWait ? '' : 'none';
+    if (carWait) {
+      const p = c.sim.renderPos.clone().project(orbit.camera);
+      carBusy.style.left = `${(((p.x + 1) / 2) * innerWidth).toFixed(0)}px`;
+      carBusy.style.top = `${(((1 - p.y) / 2) * innerHeight).toFixed(0)}px`;
+    }
     stage.updateInstances(orbit.camera.position, false, c.sim.renderPos);
     precip?.update(dt, c.sim.renderPos, new THREE.Vector3(1, 0, 0).applyQuaternion(c.sim.renderRot), c.vehicle.velocity, orbit.camera.position, null);
     // auto quality before drawing: a new render scale clears the canvas, drawn again in the same frame
