@@ -725,7 +725,7 @@ runs, alps dropped 1 frame in total (high), and vermont dropped 7 (integrated GP
 
 ## Browsers
 
-Tested on 17 October 2026 with `tools/check/browsers.mjs` (the title, then 30 s of a quick
+Tested with `tools/check/browsers.mjs` (the title, then 30 s of a quick
 stage on finland with the autopilot, 1600 × 968, 60 fps cap), on a laptop with an Intel
 integrated GPU and an RTX 5070 Ti laptop GPU:
 
