@@ -48,6 +48,11 @@ how.
 - [three.js](https://threejs.org/), [Rapier](https://rapier.rs/), [Vite](https://vite.dev/)
   and TypeScript: the web version
 - [GitHub Pages](https://pages.github.com/): the published game
+- The developer's workspace: [Omarchy](https://omarchy.org/), [Herdr](https://herdr.dev/) for the
+  agent panes, the [claude-code-status](https://github.com/jason-c-dev/claude-code-status) status
+  line and the [savvy-progress](https://github.com/johnnyvizz/claude-kit/tree/main/plugins/savvy-progress)
+  agents panel. [How the developer works with Claude](docs/making-of/02-the-tools.md#how-the-developer-works-with-claude)
+  tells more.
 
 ## Screenshots
 
