@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Copy the HUD's Inter faces (OFL 1.1) from the UE project into public/fonts/ as WOFF2, with the licence.
+// Copy the HUD's and the menus' Inter faces (light, regular, medium, semibold) (OFL 1.1) from the UE project into public/fonts/ as WOFF2, with the licence.
 //
 //   node tools/convert/fonts.mjs [--ue ../BackroadRally]     (or set BR_UE_ROOT; needs woff2_compress)
 //
@@ -19,7 +19,7 @@ const out = join(repo, 'public', 'fonts');
 mkdirSync(out, { recursive: true });
 const tmp = mkdtempSync(join(tmpdir(), 'br-fonts-'));
 try {
-  for (const face of ['Inter-Regular', 'Inter-SemiBold']) {
+  for (const face of ['Inter-Light', 'Inter-Regular', 'Inter-Medium', 'Inter-SemiBold']) {
     copyFileSync(join(src, `${face}.ttf`), join(tmp, `${face}.ttf`));
     execFileSync('woff2_compress', [join(tmp, `${face}.ttf`)], { stdio: 'ignore' });
     copyFileSync(join(tmp, `${face}.woff2`), join(out, `${face}.woff2`));

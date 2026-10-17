@@ -57,6 +57,7 @@ for (const stage of stages) {
       const ok = await page.waitForFunction(() => window.__br?.level?.run || document.getElementById('fatal'), null, { timeout: 90000 })
         .then(() => page.evaluate(() => !!window.__br?.level?.run)).catch(() => false);
       const loadMs = Date.now() - t0;
+      if (ok) await page.waitForFunction(() => window.__br?.ready, null, { timeout: 30000 }).catch(() => {}); // the loading curtain
       await page.waitForTimeout(wait * 1000);
       const info = ok ? await page.evaluate(() => {
         const br = window.__br, st = br.level.stage, f = br.level.features;

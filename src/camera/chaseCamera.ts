@@ -46,6 +46,14 @@ export class ChaseCamera {
     this.preset = (this.preset + 1) % this.cfg.presets.length;
   }
 
+  /** The settings' camera row (-1 = camera.json's default preset). */
+  setPreset(i: number): void {
+    this.preset = i >= 0 && i < this.cfg.presets.length ? i : this.cfg.default_preset;
+  }
+
+  /** The settings' field of view (vertical degrees; 0 = the preset's own). */
+  fovOverride = 0;
+
   update(dt: number, car: CarState): void {
     const c = this.cfg;
     const p = c.presets[this.preset];
@@ -95,7 +103,7 @@ export class ChaseCamera {
     this.camera.position.set(this.aim.x - hx * cp * arm, this.aim.y - Math.sin(pitch) * arm, this.aim.z - hz * cp * arm);
     this.camera.lookAt(this.aim);
 
-    const fov = p.fov_v_deg + c.speed_fov_add_deg * a;
+    const fov = (this.fovOverride > 1 ? this.fovOverride : p.fov_v_deg) + c.speed_fov_add_deg * a;
     if (Math.abs(this.camera.fov - fov) > 1e-4) {
       this.camera.fov = fov;
       this.camera.updateProjectionMatrix();

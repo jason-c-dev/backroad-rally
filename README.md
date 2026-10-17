@@ -56,32 +56,37 @@ how.
 
 Play in the browser: **<https://jason-c-dev.github.io/backroad-rally/>**
 
+The game opens on the title screen. Choose quick stage or time attack, then a car and a
+stage. The menus work with the keyboard, the mouse or a gamepad.
+
 | Key | Action |
 |---|---|
 | W / S | Throttle / brake |
 | A / D | Steer |
 | Space | Handbrake |
 | R | Recover (+5 s) |
+| Esc | Pause menu (resume, restart, recover, settings, quit) |
 | Enter | Restart the stage |
 | C | Camera |
-| K | Next time of day |
-| J | Next weather |
-| M / V | Mute / volumes |
-| N / B | Next stage / other direction |
+| M | Mute |
 
-A gamepad also works: the triggers, the left stick, L1 for the handbrake and Y to
-recover. The [reference](docs/reference.md#keys-and-gamepad) has all the keys and URL
+A gamepad also works: the triggers, the left stick, L1 for the handbrake, Y to recover
+and Start to pause. The [reference](docs/reference.md#keys-and-gamepad) has all the keys and URL
 options.
 
 **Now in the game:**
 
-- **Six stages** (N for the next): finland, japan, alps, wales, arizona and vermont, about
-  3 km each, with jumps, bridges, a ford, a canyon and crowds. B runs a stage in reverse.
-- **Five cars** (`?car=`): swift and pip (1960s, rear-wheel and front-wheel drive), lama
+- **Menus:** a title screen over a live diorama, a garage with the spec sheet of each car,
+  a stage select with the time of day, the weather and your best time, pause, results and
+  settings (assists, camera, every volume, graphics quality, frame-rate limit). Best times
+  stay in your browser.
+- **Six stages:** finland, japan, alps, wales, arizona and vermont, about
+  3 km each, with jumps, bridges, a ford, a canyon and crowds. Each runs forward or in reverse.
+- **Five cars:** swift and pip (1960s, rear-wheel and front-wheel drive), lama
   (1970s, mid-engine), quint (1980s, four-wheel drive turbo) and kaze (1990s, four-wheel
   drive turbo).
-- **Five times of day** (K): morning, afternoon, sunset, night and fog.
-- **Rain and snow** (J): the grip, the handling, the look, the effects and the sound change
+- **Five times of day:** morning, afternoon, sunset, night and fog.
+- **Rain and snow:** the grip, the handling, the look, the effects and the sound change
   with the weather. Snow has ice on the tarmac.
 - Dust, skid marks, damage, a full HUD, engine sound, crowds and music.
 

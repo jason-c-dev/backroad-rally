@@ -74,6 +74,8 @@ export interface LookOptions {
   dof: Omit<DofConfig, 'clear' | 'scale'> & { scale?: number };
   /** The weather on top of the condition (weather.json; null or clear = the plain condition). */
   weather?: WeatherDef | null;
+  /** The menus' diorama: night headlights x intensity and x range (menu.json diorama.look; a low camera saw a white blob). */
+  headlightScale?: { intensity: number; range: number };
 }
 
 export class Look {
@@ -96,6 +98,11 @@ export class Look {
   private lastFov = 0;
   private lastAspect = 0;
   private tmp = new THREE.Vector3();
+  /**
+   * The menus' orbit camera: focus at the car + the usual offset, a fixed f-stop (UE: 8, close-ups keep the whole
+   * car sharp); a locked car pulls the focus `past` metres behind it. null = the game camera's tilt-shift.
+   */
+  dofOverride: { fstop: number; past: number } | null = null;
 
   constructor(private renderer: THREE.WebGPURenderer, private scene: THREE.Scene, private camera: THREE.PerspectiveCamera,
     private json: ConditionsJson, private opts: LookOptions, private car: { root: THREE.Object3D; headlightPosCm: number[][] }) {
@@ -259,6 +266,12 @@ export class Look {
     this.setHeadlights(c);
   }
 
+  /** Another car (the garage): the headlights move to it. */
+  setCar(car: { root: THREE.Object3D; headlightPosCm: number[][] }): void {
+    this.car = car;
+    if (this.cond) this.setHeadlights(this.cond);
+  }
+
   /** Night: two spot lights at the car's headlamps (cone 10°/24°, 55 m), the first casting shadows. */
   private setHeadlights(c: Condition): void {
     for (const l of this.headlights) {
@@ -270,7 +283,8 @@ export class Look {
     if (!h) return;
     const [x, y, z] = this.car.headlightPosCm[0];
     for (const side of [1, -1]) {
-      const l = new THREE.SpotLight(h.color, h.intensity, h.range, (h.outer * Math.PI) / 180, 1 - h.inner / h.outer, 2);
+      const hs = this.opts.headlightScale ?? { intensity: 1, range: 1 };
+      const l = new THREE.SpotLight(h.color, h.intensity * hs.intensity, h.range * hs.range, (h.outer * Math.PI) / 180, 1 - h.inner / h.outer, 2);
       // car-local: UE (X fwd, Y right, Z up) cm -> three (x, y up, z right) m, mirrored across the centreline
       l.position.set(x / 100 + h.forward, z / 100, (side * y) / 100);
       const yawOut = (Math.sign(side * (y || 1)) * h.yawOut * Math.PI) / 180; // outward, toward the lamp's side
@@ -309,7 +323,13 @@ export class Look {
     const viewDepth = this.tmp.copy(carPos).setY(carPos.y + 0.6).sub(cam.position).dot(cam.getWorldDirection(new THREE.Vector3()));
     // the tilt-shift is stronger in rain and snow (camera.json dof.by_weather has only clear)
     const clear = !this.opts.weather || this.opts.weather.name === 'clear';
-    this.post.update(width, height, viewDepth, { ...this.opts.dof, clear, scale: this.opts.dof.scale ?? 1 });
+    const o = this.dofOverride;
+    if (o) {
+      // orbit: no distance scaling of the f-stop, no clear-weather offset (UE skips both for the orbit camera)
+      const depth = viewDepth + o.past;
+      const fstop = (o.fstop * Math.max(depth, 1)) / this.opts.dof.refDistance;
+      this.post.update(width, height, depth, { ...this.opts.dof, fstop, clear: false, scale: this.opts.dof.scale ?? 1 });
+    } else this.post.update(width, height, viewDepth, { ...this.opts.dof, clear, scale: this.opts.dof.scale ?? 1 });
   }
 
   render(): void {

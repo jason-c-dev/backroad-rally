@@ -81,8 +81,28 @@ export class MusicPlayer {
     this.step(1);
   }
 
+  /** The track playing now and its position (the menus keep it across a page load). */
+  get current(): { track: string; time: number } | null {
+    const name = this.playlist[this.index];
+    return name && this.wantPlay ? { track: name, time: this.el.currentTime || 0 } : null;
+  }
+
+  /** Go on with a track from a position (after a page load), with a short fade-in; false if it isn't in the list. */
+  resume(track: string, time: number): boolean {
+    const i = this.playlist.indexOf(track);
+    if (!this.available || i < 0) return false;
+    this.index = i - 1;
+    this.step(1, 0.5);
+    const seek = () => {
+      if (time > 0 && time < (this.el.duration || Infinity) - 1) this.el.currentTime = time;
+    };
+    if (this.el.readyState >= 1) seek();
+    else this.el.addEventListener('loadedmetadata', seek, { once: true });
+    return true;
+  }
+
   /** Next (+1) or previous (-1) track, with a 2 s fade-in. */
-  step(dir: 1 | -1): void {
+  step(dir: 1 | -1, fadeS = 2): void {
     if (!this.available || !this.playlist.length) return;
     this.wantPlay = true;
     const n = this.playlist.length;
@@ -92,7 +112,7 @@ export class MusicPlayer {
     const t = this.sys.ctx.currentTime;
     this.fade.gain.cancelScheduledValues(t);
     this.fade.gain.setValueAtTime(0, t);
-    this.fade.gain.linearRampToValueAtTime(1, t + 2);
+    this.fade.gain.linearRampToValueAtTime(1, t + fadeS);
     void this.el.play().catch(() => {
       // not allowed yet (no gesture): the unlock handler calls start() again
       this.wantPlay = false;

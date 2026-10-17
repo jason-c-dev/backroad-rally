@@ -9,7 +9,7 @@
 //                 off, flashing yellow (minor), yellow, flashing red (major), red (broken)
 //   bottom centre the gear gate, an H pattern with the current gear lit (r red)
 //   bottom right  speed as a number or a dial, km/h or mph
-//   centre        intro card, 3-2-1-go, the results panel
+//   centre        intro card, 3-2-1-go (the results and pause panels are the menus': src/menu/stageMenus.ts)
 //
 // Every size is in Slate units at 1080p: CSS px = units x hud.json scale (1.1) x the "hud size" setting
 // (80-130%) x the shortest window side / 1080 (UE's DPI rule). A few of the original's sizes ignore
@@ -97,6 +97,8 @@ const interp = (cur: number, target: number, dt: number, speed: number) => cur +
 export class StageHud {
   readonly root: HTMLElement;
   feed: HudFeed = { position: null, ghostDelta: null, best: null };
+  /** A menu panel is up (pause, settings): the instruments hide, as on the results (src/menu/stageMenus.ts). */
+  panelOpen = false;
   private s: HudSettings;
   private timer: HTMLElement;
   private posEl: HTMLElement;
@@ -124,7 +126,6 @@ export class StageHud {
   private results: HTMLElement;
   private dip: HTMLElement;
   private last = 0;
-  private resultsKey = '';
   private cardKey = '';
   private yellow: [number, number, number, number];
   private red: [number, number, number, number];
@@ -250,7 +251,7 @@ export class StageHud {
     this.last = now;
     const phase = run.phase;
     const results = phase === 'results';
-    this.root.classList.toggle('panel-open', results);
+    this.root.classList.toggle('panel-open', results || this.panelOpen);
 
     // timer: stage time; the penalties are listed under it
     this.timer.textContent = formatTime(Math.min(run.clock, run.flow.time_cap_s));
@@ -298,17 +299,13 @@ export class StageHud {
       this.cardKey = card;
       this.card.innerHTML = card;
     }
-    this.card.style.display = card && !results ? '' : 'none';
+    this.card.style.display = card && !results && !this.panelOpen ? '' : 'none';
     const cd = run.callout;
     this.countdown.textContent = cd ?? '';
     this.countdown.style.display = cd ? '' : 'none';
     this.countdown.style.color = cd === 'go' ? 'var(--go)' : '#fff';
-    const rk = results ? `${run.dnf}|${run.dnfReason}|${run.clock}|${run.penalties}` : '';
-    if (rk !== this.resultsKey) {
-      this.resultsKey = rk;
-      this.results.innerHTML = results ? resultsHtml(run, info) : '';
-    }
-    this.results.style.display = results ? '' : 'none';
+    // the results panel is the menus' (src/menu/stageMenus.ts): restart, choose another stage, main menu
+    this.results.style.display = 'none';
     this.dip.style.opacity = age < 0.6 ? String(0.92 * (1 - age / 0.6)) : '0';
   }
 
@@ -470,15 +467,4 @@ function arcPath(O: number, r: number, sweep: number, f0: number, f1: number): s
 
 function esc(s: string): string {
   return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
-}
-
-/** The original's results panel (no menus yet: Enter restarts). */
-function resultsHtml(run: StageRun, info: HudInfo): string {
-  const title = run.dnf ? `dnf · ${esc(run.dnfReason || 'retired')}` : 'stage complete';
-  const line = run.dnf
-    ? 'did not finish: classified last'
-    : `time ${formatTime(run.clock)} · penalties +${run.penalties.toFixed(1)} s (${run.recovers}) · total ${formatTime(run.total)}`;
-  return `<div class="panel"><div class="sub">${esc(info.stageName.toLowerCase())} · ${esc(info.subtitle)}</div>` +
-    `<div class="title${run.dnf ? ' dnf' : ''}">${title}</div><div class="line">${line}</div>` +
-    `<div class="item sel">restart stage<span class="key">enter</span></div></div>`;
 }
