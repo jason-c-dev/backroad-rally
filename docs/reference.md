@@ -11,6 +11,8 @@ For the story of how the game was made, read [the making-of](making-of/README.md
 - [A stage run](#a-stage-run)
 - [Settings](#settings)
 - [Saves](#saves)
+- [Career](#career)
+- [Ghosts](#ghosts)
 - [Stages](#stages)
 - [Keys and gamepad](#keys-and-gamepad)
 - [URL options](#url-options)
@@ -45,18 +47,19 @@ Inter text on light panels, as in the original.
 | Screen | Contents |
 |---|---|
 | Title | career, quick stage, time attack, settings |
-| Career | A card that tells what the career will be. The career comes in slice 10. |
-| Garage | The car and its livery, the spec sheet and the bio, "choose stage", "back" |
+| Career hub | The season, the group and the era, your points and place, the restarts left, the four rallies with their stages, then "start rally", "next stage" or "rally results", "standings", "new career", "back" (see [Career](#career)) |
+| Garage | The car and its livery, the spec sheet and the bio, "choose stage" ("start rally" in the career: the season's cars only), "back" |
 | Stage select | The stage (with its flag), the direction, the time of day, the weather, the best time, "start", "back" |
 | Loading card | The stage name, the location, the length, the direction, the time of day, the weather, the mode, the car and the controls |
+| Rally results, standings, season complete | After each rally of the career (see [Career](#career)) |
 
 - **Quick stage** has half damage (`menu.json` `quick_damage_level`). **Time attack** has no
-  damage. The best-run ghost of time attack comes in slice 10.
+  damage. Both race the ghost of your best run and the rival ghosts (see [Ghosts](#ghosts)).
 - **Time of day and weather.** "(default)" is the stage's own choice for the direction.
 - **Locked cars and liveries.** A fresh save has the swift and the pip (`career.json`
   `start_cars`). The other cars and the bonus liveries are locked, as in the original: the
   car is out of focus under a turning padlock, and "choose stage" is refused. The career
-  unlocks them (slice 10). `?unlockall` unlocks all of them for development.
+  unlocks them. `?unlockall` unlocks all of them for development.
 - **The backdrop** is a live diorama: the stage of the selected location, with the selected
   car parked on the road and a camera that turns around it (`menu.json` `diorama`). The car,
   the livery and the time of day change at once. A different location or weather loads the
@@ -80,7 +83,9 @@ The menus and a stage run are separate page loads. When you start a stage, quit 
 or change the backdrop, the page loads again. Thus the old stage releases all its memory.
 `sessionStorage` keeps the screen, the selections and the song for the next page. A stage
 run from the menus has an address like
-`?mode=quick&stage=wales&car=pip&livery=1&cond=stage&weather=stage`. An address with
+`?mode=quick&stage=wales&car=pip&livery=1&cond=stage&weather=stage`. A career stage has
+`?mode=career`: the page takes the stage, the car and the livery from the save, not from
+the address. An address with
 `?stage=`, `?car=` or `?autopilot=` and no `?mode=` goes directly to the stage, as before
 the menus (for development and the check scripts).
 
@@ -95,11 +100,13 @@ A run has these steps:
 3. A 3-2-1 countdown starts. The clock starts on "go".
 4. You drive about 3 km to the finish arch.
 5. The car coasts for 3 s. Then the results show: the time, the penalties, the total and,
-   in quick stage and time attack, the best time ("new best time" when you beat it). Select
-   "restart stage", "choose another stage" or "main menu".
+   in quick stage and time attack, the best time ("new best time" when you beat it) and the
+   rival ghosts that raced. Select "restart stage", "choose another stage" or "main menu".
+   In the career, the results show the stage with all the rivals (see [Career](#career)).
 
 **Pause.** Esc or the gamepad's Start opens the pause menu: resume, restart stage, recover
-car (+5 s), settings, quit to menu. The pause stops the simulation, the stage clock, the
+car (+5 s), settings, quit to menu. In the career, the menu shows the restarts that are
+left, and "quit to career" keeps the career at this stage. The pause stops the simulation, the stage clock, the
 effects and all sounds except the music and the menu sounds.
 
 These rules apply during the run:
@@ -126,8 +133,8 @@ The settings screen is in the title menu and in the pause menu
 | | speed units | km/h / mph |
 | | speed display | number / dial |
 | | hud size | 80–130% (100%) |
-| | ghost of best run | on / off (on). Slice 10 draws the ghost. |
-| | rival ghosts | off / 3 / all (3). It cannot change until slice 10. |
+| | ghost of best run | on / off (on). It applies at once. |
+| | rival ghosts | off / 3 / all (3). Quick stage and time attack race 3 or all nine rivals. The career races all of them unless the setting is off. It applies at the next start. |
 | sound | master, music, effects, engine, tyres and surface, crowd, ambience, weather, interface | off–100% in steps of 10 (master 80%, the groups 100%); sound on / muted |
 | display & graphics | display | window / fullscreen |
 | | graphics quality | auto / low / medium / high (auto) |
@@ -169,13 +176,150 @@ has a version number (now 1).
 |---|---|
 | `best` | The best total time (penalties included) for each mode, stage, direction, car and weather, for example `quick:finland:fwd:swift:clear`, with the car and the date. The original kept one time for each car group. |
 | `unlocks` | `groups`, `cars`, and `liveries` (the cars with an unlocked bonus livery) |
-| `career` | The career slot for slice 10 (empty) |
+| `career` | The career in progress (see [Career](#career)), empty until a career starts |
 
 - A missing, unreadable or damaged save loads as the defaults. The game keeps each field
-  that is still valid.
+  that is still valid. The career has its own check: each field that is not valid goes back
+  to its default.
+- The ghosts of the best runs are not in the save. Each ghost has its own key (see
+  [Ghosts](#ghosts)), so a bad ghost cannot damage the save.
 - An older save is migrated. A save from a newer version keeps the fields that this version
   knows.
 - Only finished runs in quick stage and time attack record a best time. A retirement does not.
+
+## Career
+
+The career is in `src/game/career.ts` (the rules) and `src/menu/menu.ts` (the screens). It
+uses `career.json` format 2, as the original.
+
+- **Seasons.** There are four seasons: group 2 (1960s), group 4 (1970s), group b (1980s) and
+  group a (1990s). Each season has four rallies. Each rally has two stages: forward, then
+  reverse. The time of day and the weather are fixed for each stage.
+- **Cars.** The garage shows only the cars of the season. You select the car and the livery
+  at the start of each rally.
+- **Service and damage.** At the start of a rally the car is repaired. Damage stays between
+  the two stages of a rally, at the career's damage level (`damage_level` 1.0). The damage
+  lights show the damage from the stage before.
+- **Restarts.** You have three restarts in each season. When you restart after the result
+  is saved, the stage goes back to how it was before the start, and the rivals keep their
+  times.
+- **Save.** The game saves after each stage and at the start of each stage. "Quit to career" keeps
+  the career at the current stage.
+- **Results.** After each stage: the stage table with the nine rivals (position, stage time,
+  gap, the rally total from the second stage, a note for a rival that crashed). After the
+  last stage of a rally: "continue · rally results". Then the rally results (total, gap,
+  points), the season standings and, after the last rally, the "season complete" card
+  with the unlocks.
+- **Unlocks.** A finished season unlocks the next group and its cars. A season podium (first
+  to third) unlocks the bonus livery of each car that you drove in that season.
+- **New career.** "New career" starts again from group 2. The unlocks and the best times
+  stay.
+
+### The rival simulation
+
+Each of the nine rivals has a skill from 1.0 to 1.12. The rival's stage time is
+`target × (skill + 0.012 × N(0, 1))`:
+
+- `target` is `target_times[stage][fwd|rev][group]` in clear weather. In rain or snow it is
+  `target_times_weather[stage][fwd|rev][weather][group]`. Without a measured value it is the
+  clear target × `weather_factor[weather][surface]`.
+- A rival crashes with a chance of 5% and loses 5 to 25 s. A rival retires (dnf) with a
+  chance of 1.2%.
+- The random stream is a port of UE's `FRandomStream` and `HashCombine`. The seed comes from
+  the career seed, the season, the rally, the stage and the group. Thus a restart does not
+  change the rivals' times. A new career adds 7919 to the seed.
+
+### Points and standings
+
+- Points for the rally classification: 25, 18, 15, 12, 10, 8, 6, 4, 2, 1. A dnf in a stage
+  is a dnf for the rally, and a dnf gets no points.
+- In the stage table, the finishers come first by time, then the dnf rows. If you retire,
+  you are last. If your time is the same as a rival's time, the rival is first.
+- The standings sort by points, then by the better best finish, then by the lower driver
+  number (you are driver 0).
+
+### Old saves
+
+A career from a different `career.json` format restarts its current season at the first
+rally (the original's `MigrateCareer`). If the career is still in the first rally and that
+rally has the same stages in the new list, the career does not change. The finished
+seasons, the unlocks, the best times and the seed stay.
+
+## Ghosts
+
+The ghosts are in `src/game/ghosts.ts`. They read the car and the run, but they do not
+change them. They have no collision and no sound, and they cast no shadow.
+
+### The ghost of your best run
+
+- In quick stage and time attack, the game records each run at 15 Hz: the position, the
+  rotation, the front-wheel steer and the stage progress.
+- A new best time keeps the run as the ghost for that stage, direction, car and weather.
+  The next run races it.
+- The ghost is a light blue (#7FA8E6) see-through car at 0.4 opacity. It fades near your
+  car and near the camera, and 0.6 s after its finish. The setting "ghost of best run"
+  switches it off.
+- Playback uses Catmull-Rom curves for the position and slerp for the rotation. A jump of
+  more than 15 m (a recover) is not smoothed.
+- **The HUD delta** is your stage time minus the ghost's time at the same progress. It
+  updates five times each second, from 25 m. Green is ahead, red is behind. Under it, the
+  HUD shows your best time ("no best time yet" before the first finish).
+
+### Rival ghosts
+
+- Each stage and direction has one reference line: a clean autopilot run from the original
+  (`public/data/rival_lines/<stage>_<fwd|rev>.json`). `index.json` tells which car drove
+  each line.
+- Each rival drives the line on its own clock. The pace changes by up to ±4.5% between
+  random nodes every 300 m. Then the game scales the pace, so that the ghost crosses the
+  finish on the rival's simulated time.
+- A rival that crashed stops at a random point for the crash time. A rival that retired
+  stops and fades out.
+- Each rival has a lateral slot (±120 cm), plus a 35 cm weave. The slot stays inside the
+  road.
+- Each ghost is the rival's car (a car of the season in the career, a car of your group in
+  quick stage) in a livery tinted with the rival's colour. A name label with a colour dot
+  shows over each ghost near the camera.
+- **The live position** ("p3 / 10") counts the rivals whose time at your progress is less
+  than your time with penalties. It updates five times each second, and a change must hold
+  for 0.5 s. At the finish it is the same as the results table.
+- **Which rivals.** The career races all nine, with the times of the results. Quick stage
+  and time attack give the rivals times from the targets of your car's group and the
+  weather (no crashes). With "3", the two nearest rivals that are faster than your best
+  time and the nearest slower one race. Without a best time, three from the middle of the
+  field race.
+
+### Cost
+
+- All ghosts use one material. Each ghost is one mesh in its rest pose (the wheels do not
+  turn), so each ghost is one draw call. The loading curtain builds the shader. Thus no
+  shader compiles during a run.
+- Measured on the Intel iGPU at 1920×1080, auto quality (alps, best ghost and nine
+  rivals): 60 fps held, the same GPU time as without ghosts, +5 draw calls.
+
+### The ghost codec
+
+The codec is in `src/game/ghostCodec.ts`. It is a port of the original's codec, byte for
+byte, so the original's reference lines load.
+
+- The samples are in UE units: centimetres and degrees, UE axes.
+- Struct of arrays, little-endian. Each channel stores the difference to the sample before
+  it:
+
+| Channel | Type | Unit |
+|---|---|---|
+| position x, y, z | int32 | cm |
+| yaw, pitch, roll | int16 | 1/182 degree (65536 for 360°), the values wrap |
+| steer | int8 | 0.5 degree (not delta-coded) |
+| progress | int32 | dm |
+
+- This is 23 bytes for each sample. Then zlib (the browser's `CompressionStream('deflate')`)
+  and base64. If the packed length is the same as `raw_bytes`, the data is not compressed.
+- **Storage.** Each best ghost is a `localStorage` key `backroad-rally.ghost.<best-time key>`,
+  next to the save. One ghost of a 1:50 stage is about 14–18 kB. The game keeps 60 ghosts at
+  most (about 1 MB): when there are more, or when the storage is full, the oldest ghosts go.
+- `test/ghostCodec.test.ts` decodes every reference line and encodes it again to the same
+  bytes. It also sends a recorded run through zlib and base64 and back.
 
 ## Stages
 
@@ -253,6 +397,10 @@ Add the options to the page address, for example `?car=pip&cond=night`.
 | `?car=<id>` | The car: swift, pip, lama, quint or kaze. Goes directly to the stage. |
 | `?livery=<n>` | The livery (0 is the first) |
 | `?mode=quick\|attack` | A stage run from the menus: quick stage (half damage) or time attack (no damage). The results offer "choose another stage", and a finish records the best time. |
+| `?mode=career` | The career's next stage, from the save |
+| `?rivals=<n>` | For development: race n rival ghosts (0 to 9) in any mode, also on a development page |
+| `?devghost=1` | For development: race the stage's reference line as the best-run ghost (perf checks) |
+| `?autocontinue` | For headless checks: the menus and the results continue by themselves through a career. With it, `?autopilot` and `?timescale` stay on from page to page. |
 | `?menu` | Open the menus, also with stage options in the address |
 | `?unlockall` | For development: unlock all cars and bonus liveries in the save |
 | `?fps=<n>` | Frame-rate limit for one visit (0 = uncapped). Runs with `?autopilot` or `?timescale` are always uncapped. |
@@ -642,7 +790,7 @@ shortest side of the window and by the HUD size setting.
 
 | Position | Contents |
 |---|---|
-| Top right | The stage time, in a panel of fixed width (tabular digits, so the width never changes). Under it: a +5.0 s pop for each penalty, and the penalties until now. Slots for the live position, the ghost delta and the best time wait below, hidden until the career and the ghosts exist. |
+| Top right | The stage time, in a panel of fixed width (tabular digits, so the width never changes). Under it: the live position against the rival ghosts ("p3 / 10"), the ghost delta, a +5.0 s pop for each penalty, the penalties until now, and the best time (quick stage and time attack) |
 | Left | The stage progress: the start at the bottom, the finish at the top |
 | Bottom left | Six damage warning lights (front, rear, engine; left, right, suspension). Off, flashing yellow for a scratch, yellow for damage, flashing red for major damage, red when broken. All red when the car is wrecked. `?damage=0` hides them. |
 | Bottom centre | The gear gate: an H pattern with the current gear lit. Reverse is red. |
@@ -809,6 +957,16 @@ The check scripts use headless Chrome through playwright-core:
   stage select and the title. It saves a screenshot of each screen, checks that the clock
   stops during the pause, and prints the console errors. `--input pad` uses a simulated
   gamepad. With `--webgpu --noshot` it walks on WebGPU in headless Chrome.
+- `node tools/check/ghosts.mjs [--params "mode=quick&stage=finland&car=swift&rivals=9&devghost=1"] [--at 4,10,25] [--results] [--again] [--career] [--webgpu] [--noshot] [--timescale 4]`
+  drives a stage with the autopilot and the ghosts. At each clock time it saves a
+  screenshot and prints the live position, the delta and the opacity of each ghost. It
+  also prints the shader count at the curtain and at the end. `--again` loads the page
+  again after the finish, so the stored best ghost races. `--career` puts a new career in
+  the save first.
+- `node tools/check/career.mjs [--timescale 4] [--seasons 1] [--webgpu] [--noshot]`
+  plays a full career season with the autopilot, from a new browser profile. It prints
+  each stage time, the rally tables, the standings, the unlocks and the save, and saves a
+  screenshot of each screen.
 - `node tools/check/rock.mjs [--webgl] [--car swift] [--kmh 40] [--meshes SM_Rock_B,SM_Boulder_A]`
   drives into the largest roadside rocks of each type at 40 km/h. It checks that the car
   stops at each rock, does not fly up, and can reverse away. It saves a screenshot at

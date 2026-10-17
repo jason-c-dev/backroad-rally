@@ -1,16 +1,19 @@
-// The menus (the original's SRallyMenu): title -> career (a card until slice 10) / quick stage / time attack /
-// settings; garage (car, livery, spec sheet, bio; locked cars and liveries from the save) -> stage select
-// (stage, direction, time of day, weather, best time) -> the loading card -> the stage (a page load).
+// The menus (the original's SRallyMenu): title -> career hub / quick stage / time attack / settings; garage (car,
+// livery, spec sheet, bio; locked cars and liveries from the save) -> stage select (stage, direction, time of day,
+// weather, best time) -> the loading card -> the stage (a page load). The career (src/game/career.ts): the hub
+// (season, standing, restarts, the rallies and their stages), the garage with the season's cars -> the rally's
+// stages; after a rally: rally results -> standings -> the unlock card at a season's end.
 // The backdrop is the live diorama (src/menu/diorama.ts); this file only builds the panels and asks the
 // diorama for the car, the view, the lock look, the time of day and the location.
 import { formatTime } from '../game/stageRun';
-import { bestKey, isCarUnlocked, isLiveryUnlocked, type SaveData } from '../game/save';
+import { bestKey, isCarUnlocked, isLiveryUnlocked, writeSave, type SaveData } from '../game/save';
+import { formatGap, isRev, ordinal, type CareerRules, type CareerState } from '../game/career';
 import { saveRunSettings, loadRunSettings, readSection, type RunSettings } from '../settings';
-import { CAR_IDS, garageCar, groupName, km, lockLine, locationOf, stageCondition, stageMeta, stageWeather, type MenuData } from './data';
+import { CAR_IDS, careerRules, garageCar, groupName, km, lockLine, locationOf, stageCondition, stageMeta, stageWeather, type MenuData } from './data';
 import { flagSvg } from './flags';
 import { menuQuery, playQuery, putMusic, type MenuState, type PlayMode, type PlaySetup } from './nav';
 import { settingsScreen, type SettingsHost } from './settingsPanel';
-import { MenuController, Row, controlsHint, el, esc, label, onRefresh, panel, pt, setScale, spacer, u, type Screen } from './ui';
+import { MenuController, Row, controlsHint, el, esc, label, onRefresh, panel, pt, setScale, spacer, table, u, type Screen } from './ui';
 
 export interface MenuDiorama {
   showCar(car: string, livery: number): void;
@@ -56,6 +59,12 @@ export class Menu {
   private garageInit = false;
   private run: RunSettings;
   music: MenuMusic | null = null;
+  readonly rules: CareerRules;
+  /** The career in the save (null until one starts). */
+  career: CareerState | null;
+  /** Career: screens still to show after a rally; the standings screen came from the rally (not the hub). */
+  private pending: string[] = [];
+  private fromRally = false;
 
   constructor(readonly data: MenuData, readonly save: SaveData, readonly diorama: MenuDiorama, readonly host: SettingsHost,
     readonly params: URLSearchParams, state: MenuState | null) {
@@ -69,6 +78,10 @@ export class Menu {
     this.ctl = new MenuController(content);
     this.ctl.active = true;
     this.ctl.onSong = (dir) => this.music?.skip(dir);
+    this.rules = careerRules(data);
+    this.career = this.rules.load(save.career);
+    this.pending = state?.pending?.filter((x) => ['rallyresults', 'standings', 'unlock'].includes(x)) ?? [];
+    this.fromRally = this.pending.length > 0;
     setScale(this.root);
     addEventListener('resize', () => setScale(this.root));
 
@@ -125,7 +138,7 @@ export class Menu {
     return {
       screen: this.screen, flow: this.flow, car: this.car.id, livery: this.livery, stage: this.stage.id, reverse: this.reverse,
       cond: this.condIndex > 0 ? CONDITIONS[this.condIndex - 1] : 'stage', weather: this.weatherIndex > 0 ? WEATHERS[this.weatherIndex - 1] : 'stage',
-      settingsReturn: this.settingsReturn, focus,
+      settingsReturn: this.settingsReturn, focus, pending: this.pending.length ? [...this.pending] : undefined,
     };
   }
 
@@ -135,6 +148,10 @@ export class Menu {
     this.screen = screen;
     let s: Screen;
     if (screen === 'career') s = this.careerScreen();
+    else if (screen === 'confirmnew') s = this.confirmNewScreen();
+    else if (screen === 'rallyresults' && this.career?.last) s = this.rallyResultsScreen();
+    else if (screen === 'standings' && this.career) s = this.standingsScreen();
+    else if (screen === 'unlock' && this.career?.last) s = this.unlockScreen();
     else if (screen === 'garage') s = this.garageScreen();
     else if (screen === 'stageselect') s = this.stageScreen();
     else if (screen === 'settings') s = settingsScreen(this.ctl, this.host, () => this.show(this.settingsReturn));
@@ -186,39 +203,238 @@ export class Menu {
     this.show('garage');
   }
 
-  /** The career hub waits for slice 10: what it will be, and a way back. */
+  // ------------------------------------------------------------------ career (UE BuildCareer, BuildRallyResults ...)
+
+  private saveCareer(): void {
+    this.save.career = this.career as unknown as Record<string, unknown>;
+    writeSave(this.save);
+  }
+
+  /** The career hub: the season, the standing, the restarts, the rallies and their stages; start, standings, new. */
   private careerScreen(): Screen {
+    const R = this.rules, c = this.career;
     const p = panel('career');
     const box = el('div', '', p);
     box.style.paddingLeft = u(20);
     label(box, 'career', 34, 600).style.paddingBottom = u(6);
-    const n = this.data.career.seasons.length;
-    const rallies = (this.data.career as unknown as { seasons: { rallies?: unknown[] }[] }).seasons[0]?.rallies?.length ?? 4;
-    const words = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
-    label(box, `${words[n] ?? n} seasons, from the sixties to the nineties.`, 19);
-    label(box, `${words[rallies] ?? rallies} rallies a season, two stages a rally, nine rivals.`, 19);
-    label(box, 'finish a season to unlock the next group and its cars.', 19);
-    label(box, 'a podium finish earns that car\'s bonus livery.', 19);
-    spacer(box, 22);
-    const card = el('div', 'soon', box);
-    card.style.cssText = `border-left: ${u(4)} solid var(--m-accent); padding: ${u(8)} ${u(16)}; background: rgba(39,39,43,0.06)`;
-    label(card, 'coming next', 20, 600);
-    label(card, 'the career arrives in the next update (slice 10).\nquick stage and time attack are open now.', 17, 400, true);
-    spacer(p, 26);
     const rows: Row[] = [];
-    this.item(p, rows, 'quick stage', () => this.toGarage('quick'));
-    this.item(p, rows, 'back', () => this.show('title'));
-    return { el: p, rows, onBack: () => this.show('title') };
+    const words = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
+    const word = (n: number) => words[n] ?? String(n);
+    const back = () => this.show('title');
+    if (!c?.active) {
+      const s0 = R.seasons[0];
+      label(box, `${word(R.seasons.length)} seasons, from the sixties to the nineties.`, 19);
+      label(box, `${word(s0?.rallies.length ?? 0)} rallies a season, ${word(s0?.rallies[0]?.stages.length ?? 0)} stages a rally, ${word(R.rivals.length)} rivals.`, 19);
+      label(box, 'finish a season to unlock the next group and its cars.', 19);
+      label(box, 'a podium finish earns that car\'s bonus livery.', 19);
+      spacer(p, 30);
+      this.item(p, rows, 'start career', () => {
+        this.career = R.newCareer(this.career);
+        this.saveCareer();
+        this.show('career');
+      });
+      this.item(p, rows, 'back', back);
+      return { el: p, rows, onBack: back };
+    }
+    if (c.complete) {
+      const l = label(box, 'career complete. every group is yours.', 20, 500);
+      l.style.paddingTop = u(6);
+      for (const so of c.seasons) {
+        label(box, `${R.groupName(so.group)}  ·  ${ordinal(so.position)}  ·  ${so.points} pts${so.restartsUsed === 0 ? '  ·  no restarts' : ''}`, 18);
+      }
+      spacer(p, 30);
+      this.item(p, rows, 'new career', () => this.show('confirmnew'));
+      this.item(p, rows, 'back', back);
+      return { el: p, rows, onBack: back };
+    }
+    const season = R.season(c);
+    if (!season) {
+      this.item(p, rows, 'back', back);
+      return { el: p, rows, onBack: back };
+    }
+    label(box, `${season.name}  ·  ${season.era}  ·  season ${c.season + 1} of ${R.seasons.length}`, 20, 500);
+    const standings = R.standingsTable(c);
+    const me = standings.findIndex((r) => r.driver === 0) + 1;
+    const standing = c.seasonRallies.length === 0 ? 'no points yet' : `${c.seasonPoints[0] ?? 0} pts  ·  ${ordinal(me)} in the standings`;
+    label(box, `${standing}  ·  restarts left ${c.restartsLeft} of ${R.restartsPerSeason}`, 17, 400, true).style.paddingTop = u(2);
+    spacer(box, 16);
+    const over = R.isRallyOver(c);
+    season.rallies.forEach((rally, r) => {
+      let status = '';
+      if (r < c.seasonRallies.length) {
+        const o = c.seasonRallies[r];
+        status = o.dnf[0] ? 'dnf  ·  0 pts' : `${ordinal(o.order.indexOf(0) + 1)}  ·  ${o.points[0] ?? 0} pts`;
+      } else if (r === c.rally) status = over ? 'finished, results pending' : c.stage === 0 ? 'next' : `stage ${c.stage + 1} of ${rally.stages.length} next`;
+      const head = el('div', '', box);
+      head.style.cssText = `display:flex;align-items:center;padding-top:${u(6)}`;
+      const flag = el('div', '', head);
+      flag.style.cssText = `width:${u(21)};height:${u(14)};margin-right:${u(8)};flex:none`;
+      flag.innerHTML = flagSvg(this.data.menu.flags[R.stageMeta(rally.stages[0]?.stage ?? '')?.location ?? ''] ?? '');
+      const t = label(head, `${rally.name}${status ? `   —   ${status}` : ''}`, 19, r === c.rally ? 600 : 400, r !== c.rally);
+      t.style.whiteSpace = 'pre';
+      for (const sd of rally.stages) {
+        const m = R.stageMeta(sd.stage);
+        const rev = isRev(sd.variant);
+        const line = label(box, `${m?.name ?? sd.stage}  ·  ${rev ? 'reverse' : 'forward'}  ·  ${(m ? (rev ? m.km_rev : m.km_fwd) : 3).toFixed(1)} km  ·  ${sd.condition}  ·  ${R.stageWeather(sd)}`, 16, 400, true);
+        line.style.paddingLeft = u(29);
+      }
+    });
+    spacer(p, 26);
+    const rally = R.rallyDef(c);
+    if (over) {
+      this.item(p, rows, 'rally results', () => {
+        this.pending = R.finalizeRally(c, this.save.unlocks);
+        this.saveCareer();
+        this.nextPending(true);
+      });
+    } else if (rally && c.stage === 0) {
+      this.item(p, rows, `start rally: ${rally.name}`, () => {
+        this.flow = 'career';
+        this.garageInit = false;
+        this.show('garage');
+      });
+    } else if (rally) {
+      this.item(p, rows, `next stage: ${c.stage + 1} of ${rally.stages.length}`, () => this.startCareerStage());
+    }
+    if (c.seasonRallies.length > 0) {
+      this.item(p, rows, 'standings', () => {
+        this.fromRally = false;
+        this.show('standings');
+      });
+    }
+    this.item(p, rows, 'new career', () => this.show('confirmnew'));
+    this.item(p, rows, 'back', back);
+    return { el: p, rows, onBack: back };
+  }
+
+  private confirmNewScreen(): Screen {
+    const p = panel('confirmnew');
+    const box = el('div', '', p);
+    box.style.paddingLeft = u(20);
+    label(box, 'new career', 34, 600).style.paddingBottom = u(8);
+    label(box, 'start over from group 2? the current career is lost.', 19);
+    label(box, 'unlocked groups, cars, liveries and best times are kept.', 17, 400, true).style.padding = `${u(2)} 0 ${u(28)}`;
+    const rows: Row[] = [];
+    this.item(p, rows, 'no, keep my career', () => this.show('career'));
+    this.item(p, rows, 'yes, start over', () => {
+      this.career = this.rules.newCareer(this.career);
+      this.saveCareer();
+      this.show('career');
+    });
+    return { el: p, rows, onBack: () => this.show('career') };
+  }
+
+  /** After a rally: the next of the pending screens, else the hub (UE NextPending). */
+  private nextPending(first = false): void {
+    if (!first && this.pending[0] === this.screen) this.pending.shift();
+    if (this.pending.length) {
+      this.fromRally = true;
+      this.flow = 'career';
+      this.show(this.pending[0]);
+      return;
+    }
+    this.fromRally = false;
+    this.flow = 'career';
+    this.show('career');
+  }
+
+  private resultPanel(sub: string, title: string, extra?: string): { p: HTMLElement; box: HTMLElement } {
+    const p = panel(title);
+    const box = el('div', '', p);
+    box.style.paddingLeft = u(20);
+    label(box, sub, 17, 400, true);
+    label(box, title, 34, 600).style.paddingBottom = u(extra ? 2 : 18);
+    if (extra) label(box, extra, 17, 400, true).style.paddingBottom = u(18);
+    return { p, box };
+  }
+
+  private rallyResultsScreen(): Screen {
+    const L = this.career!.last!;
+    const { p } = this.resultPanel(L.seasonName, `${L.rallyName}  ·  results`, `your car: ${this.rules.carName(L.car)}`);
+    const t = el('div', '', p);
+    t.style.padding = `0 0 ${u(24)} ${u(8)}`;
+    table(t, [{ title: 'pos', width: 56 }, { title: 'driver', width: 230 }, { title: 'total', width: 130, right: true }, { title: 'gap', width: 130, right: true },
+      { title: 'pts', width: 70, right: true }],
+    L.rows.map((r) => [String(r.position), r.name, r.dnf ? 'dnf' : formatTime(r.time), r.dnf || r.position === 1 ? '' : formatGap(r.gap), String(r.points)]),
+    L.rows.map((r) => r.driver === 0));
+    const rows: Row[] = [];
+    this.item(p, rows, 'continue', () => this.nextPending());
+    return { el: p, rows, onBack: () => this.nextPending() };
+  }
+
+  private standingsScreen(): Screen {
+    const c = this.career!, R = this.rules, L = c.last;
+    const fromRally = this.fromRally && !!L;
+    const rowsT = fromRally ? L!.standings : R.standingsTable(c);
+    const season = R.season(c);
+    const sub = fromRally
+      ? (L!.seasonComplete ? `${L!.seasonName}  ·  final standings` : `${L!.seasonName}  ·  after ${L!.ralliesDone} of ${L!.ralliesTotal} rallies`)
+      : season ? `${season.name}  ·  after ${c.seasonRallies.length} of ${season.rallies.length} rallies` : '';
+    const { p } = this.resultPanel(sub, 'season standings');
+    const t = el('div', '', p);
+    t.style.padding = `0 0 ${u(24)} ${u(8)}`;
+    table(t, [{ title: 'pos', width: 56 }, { title: 'driver', width: 260 }, { title: 'points', width: 100, right: true }],
+      rowsT.map((r) => [String(r.position), r.name, String(r.points)]), rowsT.map((r) => r.driver === 0));
+    const rows: Row[] = [];
+    const go = () => (fromRally ? this.nextPending() : this.show('career'));
+    this.item(p, rows, 'continue', go);
+    return { el: p, rows, onBack: go };
+  }
+
+  private unlockScreen(): Screen {
+    const L = this.career!.last!, S = L.season;
+    const p = panel('unlock');
+    const box = el('div', '', p);
+    box.style.paddingLeft = u(20);
+    label(box, L.seasonName, 17, 400, true);
+    label(box, 'season complete', 40, 600).style.paddingBottom = u(6);
+    if (S) {
+      label(box, `you finished ${ordinal(S.position)} in ${this.rules.groupName(S.group)} with ${S.points} points`, 20, 500);
+      label(box, S.restartsUsed === 0 ? 'no restarts used' : `${S.restartsUsed} restart${S.restartsUsed === 1 ? '' : 's'} used`, 17, 400, true).style.padding = `${u(2)} 0 ${u(22)}`;
+    }
+    if (!L.unlocks.length) label(box, 'nothing new to unlock this time', 19);
+    for (const x of L.unlocks) label(box, `unlocked  ·  ${x}`, 22, 600).style.paddingTop = u(2);
+    if (L.careerComplete) label(box, 'that was the last season: career complete', 19, 500).style.paddingTop = u(16);
+    spacer(p, 28);
+    const rows: Row[] = [];
+    this.item(p, rows, 'continue', () => this.nextPending());
+    return { el: p, rows, onBack: () => this.nextPending() };
+  }
+
+  /** The career's next stage: service at the rally start, the save written, the loading card, the stage page. */
+  private startCareerStage(): void {
+    const c = this.career, R = this.rules;
+    const def = c ? R.startStage(c) : null;
+    if (!c || !def) return;
+    this.saveCareer();
+    const setup: PlaySetup = {
+      mode: 'career', stage: def.stage, reverse: isRev(def.variant), car: c.car, livery: c.livery, cond: def.condition, weather: R.stageWeather(def),
+    };
+    this.showLoading(setup);
+    this.ctl.active = false;
+    putMusic(null);
+    setTimeout(() => location.assign(`${location.pathname}${playQuery(setup, this.params)}`), 200);
+  }
+
+  /** The cars the garage offers: the season's in the career, else all. */
+  private garageCars(): string[] {
+    if (this.flow === 'career') {
+      const s = this.career ? this.rules.season(this.career) : undefined;
+      if (s?.cars.length) return s.cars;
+    }
+    return CAR_IDS;
   }
 
   private garageScreen(): Screen {
     if (!this.garageInit) {
-      // start on the car in use (the last pick), unless it's locked
+      // start on the car in use (the career's rally car, else the last pick), unless it's locked
       this.garageInit = true;
-      this.carIndex = Math.max(0, CAR_IDS.indexOf(this.run.car));
-      this.livery = this.run.livery;
+      const career = this.flow === 'career' && this.career;
+      const want = career ? career.car : this.run.car;
+      this.carIndex = Math.max(0, CAR_IDS.indexOf(this.garageCars().includes(want) ? want : this.garageCars()[0]));
+      this.livery = career ? career.livery : this.run.livery;
       if (!this.carUnlocked()) {
-        this.carIndex = 0;
+        this.carIndex = Math.max(0, CAR_IDS.indexOf(this.garageCars()[0]));
         this.livery = 0;
       }
       if (this.livery >= this.car.liveries.length) this.livery = 0;
@@ -261,8 +477,10 @@ export class Menu {
         alertAt: () => (this.lockAlertRow === row ? this.lockAlertAt : -1e9) }));
     };
     opt('car', () => this.car.name, (d) => {
-      const n = this.data.cars.length;
-      this.carIndex = (this.carIndex + d + n) % n;
+      const list = this.garageCars();
+      const n = list.length;
+      const i = Math.max(0, list.indexOf(this.car.id));
+      this.carIndex = Math.max(0, CAR_IDS.indexOf(list[(i + d + n) % n]));
       this.livery = 0;
       this.updateDiorama();
     }, () => (this.carUnlocked() ? '' : 'locked'), 'car');
@@ -277,6 +495,15 @@ export class Menu {
     spacer(box, 18);
     const blocked = () => !this.carUnlocked() || !this.liveryUnlocked();
     this.item(box, rows, this.flow === 'career' ? 'start rally' : 'choose stage', () => {
+      if (this.flow === 'career') {
+        // the rally's car and livery (UE: RallyCar, RallyLivery), then its first stage
+        if (this.career) {
+          this.career.car = this.car.id;
+          this.career.livery = this.livery;
+        }
+        this.startCareerStage();
+        return;
+      }
       this.remember();
       this.show('stageselect');
     }, {
@@ -386,7 +613,17 @@ export class Menu {
     d.showCar(this.car.id, this.livery);
     d.setView(garage ? 'garage' : 'title');
     d.setLocked(garage && (!this.carUnlocked() || !this.liveryUnlocked()));
-    if (ss) d.want(locationOf(this.data, this.stage.id), this.weatherName, this.condName);
+    // the backdrop shows where you are about to drive: the picked stage, the career's next rally; after a rally its own
+    // location on the results, standings and unlock card (UE DioramaLocation)
+    const careerNext = (): string => {
+      const c = this.career, r = c ? this.rules.rallyDef(c) : undefined;
+      if (!c?.active || c.complete || !r?.stages.length) return '';
+      return locationOf(this.data, r.stages[Math.min(c.stage, r.stages.length - 1)].stage);
+    };
+    const after = this.screen === 'rallyresults' || this.screen === 'unlock' || (this.screen === 'standings' && this.fromRally);
+    if (after && this.career?.last?.location) d.want(this.career.last.location, null, null);
+    else if (this.flow === 'career' && ['career', 'garage', 'confirmnew', 'standings'].includes(this.screen) && careerNext()) d.want(careerNext(), null, null);
+    else if (ss) d.want(locationOf(this.data, this.stage.id), this.weatherName, this.condName);
     else if (this.screen === 'title') d.want(locationOf(this.data, this.run.stage || this.data.menu.diorama.location), null, null);
     else d.want('', null, null); // keep what is on screen
   }
@@ -414,13 +651,37 @@ export class Menu {
   }
 
   showLoading(setup: PlaySetup): void {
-    this.loadingEl.replaceChildren(loadingCard(this.data, setup));
+    this.loadingEl.replaceChildren(loadingCard(this.data, setup, setup.mode === 'career' && this.career ? careerLine(this.rules, this.career) : undefined));
     this.loadingEl.style.display = '';
     this.hintsEl.style.display = this.musicEl.style.display = 'none';
   }
 
+  private autoAt = 0;
+  /**
+   * Headless career runs (?autocontinue, tools/check/career.mjs): every 1.5 s once the backdrop is up, press on
+   * through the career (result screens, the hub's next action, the garage's start); stops at the end of a season.
+   */
+  private autoStep(): void {
+    if (!this.params.has('autocontinue')) return;
+    if (this.diorama.curtain > 0.01) {
+      this.autoAt = performance.now() + 2000; // a moment on screen once the backdrop is up (the check's screenshots)
+      return;
+    }
+    if (performance.now() < this.autoAt) return;
+    this.autoAt = performance.now() + 1500;
+    const rows = this.ctl.screen?.rows ?? [];
+    const press = (re: RegExp) => rows.find((r) => re.test(String(typeof r.spec.text === 'function' ? r.spec.text() : r.spec.text)))?.press();
+    if (this.screen === 'title') press(/^career$/);
+    else if (['rallyresults', 'standings', 'unlock'].includes(this.screen)) press(/^continue$/);
+    else if (this.screen === 'garage' && this.flow === 'career') press(/^start rally$/);
+    else if (this.screen === 'career' && !(this.career?.last?.seasonComplete && this.career.rally === 0 && this.career.stage === 0)) {
+      press(/^(start career|rally results|start rally: .*|next stage: .*)$/);
+    }
+  }
+
   /** Per frame: the curtain, the live values, the gamepad, now playing. */
   frame(): void {
+    this.autoStep();
     const a = this.diorama.curtain;
     this.curtainEl.style.opacity = a.toFixed(3);
     this.curtainEl.style.display = a > 0.001 ? '' : 'none';
@@ -431,8 +692,14 @@ export class Menu {
   }
 }
 
+/** The loading card's mode line in the career: "career · group 2 · rally finland · stage 1 of 2 · the swift mk1". */
+export function careerLine(R: CareerRules, c: CareerState): string {
+  const season = R.season(c), rally = R.rallyDef(c);
+  return `career  ·  ${season?.name ?? ''}  ·  ${rally?.name ?? ''}  ·  stage ${c.stage + 1} of ${rally?.stages.length ?? 2}  ·  ${R.carName(c.car)}`;
+}
+
 /** The loading card (UE LoadingCard): stage name, the line, mode and car, "loading", the controls. */
-export function loadingCard(data: MenuData, s: PlaySetup): HTMLElement {
+export function loadingCard(data: MenuData, s: PlaySetup, modeLine?: string): HTMLElement {
   const meta = stageMeta(data, s.stage);
   const cond = s.cond === 'stage' || !CONDITIONS.includes(s.cond) ? stageCondition(data, s.stage, s.reverse) : s.cond;
   const weather = s.weather === 'stage' || !WEATHERS.includes(s.weather) ? stageWeather(data, s.stage, s.reverse) : s.weather;
@@ -445,7 +712,7 @@ export function loadingCard(data: MenuData, s: PlaySetup): HTMLElement {
   };
   line(meta?.name ?? s.stage, 64, 300, false, 0);
   line([meta?.location ?? s.stage, `${km(meta, s.reverse).toFixed(1)} km`, s.reverse ? 'reverse' : 'forward', cond, weather].join('  ·  '), 22, 400, false, 10);
-  line(`${s.mode === 'attack' ? 'time attack' : 'quick stage'}  ·  ${car?.name ?? s.car}`, 17, 400, true, 28);
+  line(modeLine ?? `${s.mode === 'attack' ? 'time attack' : 'quick stage'}  ·  ${car?.name ?? s.car}`, 17, 400, true, 28);
   line('loading', 16, 500, true, 44);
   const c = controlsHint(box, data.menu.controls, 15, true);
   c.style.paddingTop = u(40);

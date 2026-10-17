@@ -21,7 +21,7 @@ import { Vehicle, type DriverInput, type SurfaceQuery } from './sim/vehicle';
 import { Simulation } from './sim/simulation';
 import { createArcade } from './sim/arcade';
 import { DEFAULT_RULES, RoadTracker } from './sim/road';
-import { StageRun, DEFAULT_FLOW, type FlowConfig } from './game/stageRun';
+import { StageRun, DEFAULT_FLOW, formatTime, type FlowConfig } from './game/stageRun';
 import { Autopilot, DEFAULT_AUTOPILOT } from './game/autopilot';
 import { Look } from './look/look';
 import { CONDITIONS, pickCondition, type ConditionsJson } from './look/conditions';
@@ -49,12 +49,19 @@ import { deepMerge } from './sim/tuning';
 // game flow (slice 9)
 import { FrameLimiter, buildRoadMarks, createRenderer, dofOptions, gpuName, lookOverrides, type DofJson } from './boot';
 import { pageKind, parsePlay, putMenuState, type PlaySetup } from './menu/nav';
-import { loadMenuData, stageMeta } from './menu/data';
-import { loadingCard, menuHref } from './menu/menu';
+import { careerRules, loadMenuData, stageMeta } from './menu/data';
+import { careerLine, loadingCard, menuHref } from './menu/menu';
+import { playQuery } from './menu/nav';
 import { StageMenus, type ResultsInfo } from './menu/stageMenus';
 import type { SettingsHost } from './menu/settingsPanel';
 import { bestKey, loadSave, recordBest, writeSave } from './game/save';
 import type { AudioHandle } from './audio';
+// career and ghosts (slice 10)
+import { clone, isRev, type CareerState, type StageResult } from './game/career';
+import { BestGhost, RivalGhosts, careerRivals, loadRefLine, quickRivals, sampleOf, type GhostCfg, type RivalCfg, type RivalPick } from './game/ghosts';
+import type { GhostSample } from './game/ghostCodec';
+import { loadCar as loadCarData } from './data';
+import type { CarData } from './data';
 
 const params = new URLSearchParams(location.search);
 /** The stages in the original's order (?stage=<id>, N cycles them). */
@@ -117,6 +124,29 @@ async function main() {
 async function runStage(play: PlaySetup | null) {
   // the loading card first (UE: the stage level shows the menu's card while it warms up)
   const menuData = await loadMenuData().catch(() => null);
+  const startUnlocks = menuData ? { groups: menuData.career.start_groups, cars: menuData.career.start_cars } : undefined;
+  // --- career ---
+  // the career's next stage comes from the save, not the URL (src/game/career.ts): service at a rally's start, the
+  // car checked against the season, then the save is written and kept as the snapshot a restart goes back to
+  const rules = menuData ? careerRules(menuData) : null;
+  let career: CareerState | null = null;
+  let careerSnapshot: CareerState | null = null;
+  let careerDef: ReturnType<NonNullable<typeof rules>['startStage']> = null;
+  if (play?.mode === 'career') {
+    const sv = rules ? loadSave(startUnlocks) : null;
+    career = sv && rules ? rules.load(sv.career) : null;
+    careerDef = career && rules ? rules.startStage(career) : null;
+    if (!sv || !career || !careerDef || !rules) {
+      putMenuState({ screen: 'career', flow: 'career' });
+      location.assign(menuHref(params));
+      return;
+    }
+    sv.career = career as unknown as Record<string, unknown>;
+    writeSave(sv);
+    careerSnapshot = clone(career);
+    play = { ...play, stage: careerDef.stage, reverse: isRev(careerDef.variant), car: career.car, livery: career.livery, cond: careerDef.condition, weather: rules.stageWeather(careerDef) };
+  }
+  // --- /career ---
   const carId = play?.car ?? params.get('car') ?? 'swift';
   const stageId = play?.stage ?? params.get('stage') ?? 'finland';
   const reverse = play ? play.reverse : params.get('dir') === 'reverse';
@@ -159,17 +189,21 @@ async function runStage(play: PlaySetup | null) {
     isFullscreen: () => !!document.fullscreenElement,
     setFullscreen: (on) => void (on ? document.documentElement.requestFullscreen?.() : document.exitFullscreen?.())?.catch?.(() => {}),
   };
-  const quitTo = (screen: 'title' | 'stageselect') => {
+  const quitTo = (screen: 'title' | 'stageselect' | 'career') => {
     putMenuState({
       screen, flow: play?.mode ?? 'quick', car: carId, livery: play?.livery ?? 0, stage: stageId, reverse,
       cond: play?.cond ?? 'stage', weather: play?.weather ?? 'stage',
     });
     location.assign(menuHref(params));
   };
+  const careerHooks = { continue: () => {} };
   const menus = new StageMenus({
     sub: subPause,
     controls: menuData?.menu.controls ?? [],
     mode: play?.mode ?? 'dev',
+    restartsLeft: () => career?.restartsLeft ?? 99,
+    restartsTotal: rules?.restartsPerSeason,
+    careerContinue: () => careerHooks.continue(),
     canPause: () => {
       const run = (level as { run?: StageRun } | undefined)?.run;
       return !!run && run.phase !== 'results';
@@ -187,7 +221,7 @@ async function runStage(play: PlaySetup | null) {
   if (menuData) {
     menus.showCard(loadingCard(menuData, play ?? {
       mode: 'quick', stage: stageId, reverse, car: carId, livery: 0, cond: params.get('cond') ?? 'afternoon', weather: params.get('weather') ?? 'clear',
-    }));
+    }, career && rules ? careerLine(rules, career) : undefined));
     if (!play) (menus.root.querySelector('.loading .card > :nth-child(3)') as HTMLElement | null)?.replaceChildren('development');
   }
 
@@ -414,7 +448,7 @@ async function runStage(play: PlaySetup | null) {
   // (menu.json quick_damage_level) and time attack has none, as in the original.
   const damageCfg = await load<DamageJson>('damage.json');
   const damageLevel = play
-    ? (play.mode === 'attack' ? 0 : menuData?.menu.quick_damage_level ?? 0.5)
+    ? (play.mode === 'attack' ? 0 : play.mode === 'career' ? rules?.damageLevel ?? 1 : menuData?.menu.quick_damage_level ?? 0.5)
     : params.has('damage') ? Math.min(Math.max(Number(params.get('damage')) || 0, 0), 1) : 1;
   const damage = new Damage(damageCfg, {
     lengthCm: car.length_cm, widthCm: car.width_cm,
@@ -438,7 +472,15 @@ async function runStage(play: PlaySetup | null) {
   };
   // development: ?startdamage=0.8 starts the first run that damaged (smoke from 0.35, fire from 0.7; checks and perf)
   if (params.has('startdamage')) damage.add(Math.min(Math.max(Number(params.get('startdamage')) || 0, 0), 0.99));
-  level.onRestart = () => damage.repair();
+  // career: the damage carried from the rally's previous stage (the stage start's, also after a restart)
+  const carried = () => {
+    if (career && career.carriedDamage > 0) damage.carry(career.carriedDamage, career.carriedParts);
+  };
+  carried();
+  level.onRestart = () => {
+    damage.repair();
+    carried();
+  };
   level.damageView = () => (damage.enabled ? { parts: damage.parts, terminal: damage.terminal } : null);
   fx.damageState = {
     get value() {
@@ -451,13 +493,87 @@ async function runStage(play: PlaySetup | null) {
     fireFrom: damageCfg.fire_from,
   };
   // --- /damage ---
+  // --- ghosts ---
+  // src/game/ghosts.ts: the ghost of the best run (quick stage, time attack; setting "ghost of best run") and the rival
+  // ghosts (career: all unless the setting is off; quick stage and time attack: the setting off / 3 / all). They read
+  // the run and the car, never write. Development: ?rivals=<n> sets the count in any mode, ?devghost=1 races the
+  // stage's reference line as the best ghost (perf checks).
+  const tracker = (level as { tracker?: RoadTracker }).tracker ?? null;
+  const runLength = tracker ? Math.abs(tracker.finishS - tracker.startS) : 0;
+  const progressM = () => (tracker ? tracker.progress * runLength : 0);
+  const hudJson = await load<{ ghost: GhostCfg; rival_ghosts: RivalCfg }>('hud.json');
+  const timeKey = play && play.mode !== 'career' ? bestKey(play.mode, stageId, reverse, carId, weatherName) : '';
+  const bestGhost = timeKey || params.has('devghost') ? new BestGhost(hudJson.ghost, scene) : null;
+  const rivals = stageLevel ? new RivalGhosts(hudJson.rival_ghosts, scene) : null;
+  const carGroup = (car as { group?: string }).group ?? '2';
+  const rivalCount = () => (params.has('rivals') ? Math.max(0, Math.min(99, Number(params.get('rivals')) || 0))
+    : !play ? 0 : play.mode === 'career' ? (gameSettings.rivalGhosts === 0 ? 0 : 99) : gameSettings.rivalGhosts);
+  const refLine = rivals && stageLevel ? await loadRefLine(stageId, reverse, stageLevel.road) : null;
+  /** The rivals' cars: the season's in the career, else the cars of the player's group. */
+  const rivalCarData: CarData[] = await Promise.all((career && rules ? rules.season(career)?.cars ?? [carId]
+    : (menuData?.cars.filter((c) => c.group === carGroup).map((c) => c.id) ?? [carId])).map((id) => loadCarData(id)));
+  /** This stage's rival times: the career's rival sim (the same call the result makes), else the quick-stage picks. */
+  const careerStage = (): StageResult | null => career && rules && careerDef
+    ? rules.simulateStage(career.seed, career.season, career.rally, career.stage, careerDef, rules.season(career)!.group, 0, false, 0) : null;
+  const pickRivals = (): RivalPick[] => {
+    const n = rivalCount();
+    if (!rules || n <= 0) return [];
+    const cs = careerStage();
+    if (cs) return careerRivals(rules, cs).slice(0, n);
+    const best = timeKey ? save?.best[timeKey]?.time ?? 0 : 0;
+    return quickRivals(rules, stageId, reverse, carGroup, weatherName, n, best);
+  };
+  let save = menuData ? loadSave(startUnlocks) : null;
+  const setupRivals = () => rivals?.setup(refLine, pickRivals(), rivalCarData) ?? Promise.resolve();
+  await setupRivals();
+  if (bestGhost) {
+    bestGhost.enabled = gameSettings.ghost || params.has('devghost');
+    if (params.has('devghost') && refLine) await bestGhost.use(refLine.s, refLine.hz, refLine.finishTime, refLine.car);
+    else if (timeKey) await bestGhost.load(timeKey);
+  }
+  if (rivals && level.hud) rivals.attachLabels(level.hud.root);
+  // the setting "ghost of best run" applies at once; "rival ghosts" at the next start (UE BeginRun)
+  const applyGameBase = actions.applyGame;
+  actions.applyGame = () => {
+    applyGameBase();
+    if (bestGhost) bestGhost.enabled = gameSettings.ghost || params.has('devghost');
+  };
+  const ghostSample: GhostSample = { x: 0, y: 0, z: 0, yaw: 0, pitch: 0, roll: 0, steer: 0, progress: 0 };
+  const ghostStep = level.step?.bind(level);
+  level.step = (dt, input) => {
+    const out = ghostStep ? ghostStep(dt, input) : input;
+    const run = (level as { run?: StageRun }).run;
+    // every physics step while running: the best ghost's recording (15 Hz samples interpolated between steps)
+    if (bestGhost && run?.phase === 'running') bestGhost.record(run.clock, sampleOf(vehicle.position, vehicle.quaternion, vehicle.wheelAngleDeg, progressM(), ghostSample));
+    return out;
+  };
+  const ghostRestart = level.onRestart;
+  level.onRestart = () => {
+    ghostRestart?.();
+    bestGhost?.beginRun();
+    rivals?.beginRun();
+    // quick stage and time attack pick again (a new best time moves the picks); the career's rivals never re-roll
+    if (rivals && !career) void setupRivals();
+  };
+  bestGhost?.beginRun();
+  rivals?.beginRun();
+  // --- /ghosts ---
   // place the camera, then build every pipeline now rather than mid-run (the loading curtain covers this)
   chase.update(0, { position: sim.renderPos, forward: new THREE.Vector3(1, 0, 0).applyQuaternion(sim.renderRot), velocity: vehicle.velocity });
   look.update(0, sim.renderPos, innerWidth, innerHeight);
   const stageOf = (level as { stage?: Stage }).stage;
   const t0 = performance.now();
+  // the ghosts' one shader is built now too: drawn (invisible, 0.1 % of their pixels) in front of the camera
+  rivals?.warm(true, sim.renderPos);
+  if (bestGhost?.mesh) {
+    bestGhost.mesh.visible = true;
+    bestGhost.mesh.position.copy(sim.renderPos);
+    bestGhost.mesh.userData.ghostOpacity = 0.001;
+  }
   if (stageOf) stageOf.warmup(() => look.render());
   else look.render();
+  rivals?.warm(false, sim.renderPos);
+  if (bestGhost?.mesh) bestGhost.mesh.visible = false;
   if (stageOf) stageOf.timings.warmup = performance.now() - t0;
   const controls = new Controls();
   const hud = new FrameHud(document.body, backend);
@@ -501,7 +617,7 @@ async function runStage(play: PlaySetup | null) {
       setHud({ debug: !hudSettings.debug });
     }
     // Enter restarts the stage (outside the menus, once the curtain is gone)
-    if (e.code === 'Enter' && menus.ready) level.restart?.();
+    if (e.code === 'Enter' && menus.ready) actions.restart();
   });
 
   const onResize = () => {
@@ -513,24 +629,75 @@ async function runStage(play: PlaySetup | null) {
   addEventListener('resize', onResize);
   onResize(); // the window may have changed while the stage loaded (going fullscreen, for one)
 
-  // restart and recover from the menus
-  actions.restart = () => level.restart?.();
+  // restart and recover from the menus. Career: a restart uses one of the season's (none left: refused); after the
+  // result was saved it puts the stage back as it was (the snapshot), so the rivals' times stay
+  let careerCommitted = false;
+  actions.restart = () => {
+    if (career && rules) {
+      if (!rules.restart(career, careerCommitted ? careerSnapshot : null)) return;
+      careerCommitted = false;
+      careerSnapshot = clone(career); // the stage start again, with this restart counted
+      const sv = loadSave(startUnlocks);
+      sv.career = career as unknown as Record<string, unknown>;
+      writeSave(sv);
+    }
+    level.restart?.();
+  };
   actions.recover = () => {
     if (arcade.recover(vehicle, true)) sim.snap();
   };
-  // quick stage and time attack keep the best time per stage, direction, car and weather (src/game/save.ts)
-  const save = menuData ? loadSave({ groups: menuData.career.start_groups, cars: menuData.career.start_cars }) : null;
+  // quick stage and time attack keep the best time per stage, direction, car and weather (src/game/save.ts); a new
+  // best keeps the run as the ghost of that key (src/game/ghostStore.ts) and races the next restart
   let lastResult: ResultsInfo['best'] = null;
   fxEvents.on('finish', (e) => {
     lastResult = null;
-    if (!play || !save || e.dnf) return;
-    const fresh = loadSave({ groups: menuData!.career.start_groups, cars: menuData!.career.start_cars });
-    lastResult = recordBest(fresh, bestKey(play.mode, stageId, reverse, carId, weatherName), e.time, carId);
-    if (lastResult.newBest) writeSave(fresh);
+    if (!play || !timeKey || e.dnf) return;
+    const fresh = loadSave(startUnlocks);
+    lastResult = recordBest(fresh, timeKey, e.time, carId);
+    if (lastResult.newBest) {
+      writeSave(fresh);
+      save = fresh;
+      const run = (level as { run?: StageRun }).run;
+      if (bestGhost && run) void bestGhost.keep(timeKey, run.clock, e.time, carId, liveryIndex).then((bytes) => console.info(`ghost saved: ${timeKey}, ${bytes} B`));
+    }
   });
+  // career: the result is saved once the run reaches the results (the rival sim, damage carried, the next stage)
+  let careerInfo: ResultsInfo['career'] = null;
+  const commitCareer = (run: StageRun) => {
+    if (!career || !rules || careerCommitted) return;
+    const r = rules.stageResult(career, run.total, run.penalties, run.dnf, damage.value, [...damage.parts]);
+    if (!r) return;
+    careerCommitted = true;
+    const sv = loadSave(startUnlocks);
+    sv.career = career as unknown as Record<string, unknown>;
+    writeSave(sv);
+    careerInfo = { stageRows: rules.stageTable(r.result), rallyRows: rules.rallyTable(career.rallyStages), index: r.index, count: r.count, rallyOver: rules.isRallyOver(career) };
+  };
+  // continue: the rally's next stage (a page load), or its results in the menus (rally results, standings, unlock card)
+  careerHooks.continue = () => {
+    if (!career || !rules) return;
+    const sv = loadSave(startUnlocks);
+    if (rules.isRallyOver(career)) {
+      const pending = rules.finalizeRally(career, sv.unlocks);
+      sv.career = career as unknown as Record<string, unknown>;
+      writeSave(sv);
+      putMenuState({ screen: pending[0] ?? 'career', flow: 'career', pending });
+      location.assign(menuHref(params));
+      return;
+    }
+    const def = rules.startStage(career);
+    sv.career = career as unknown as Record<string, unknown>;
+    writeSave(sv);
+    if (!def) return quitTo('career');
+    location.assign(`${location.pathname}${playQuery({ mode: 'career', stage: def.stage, reverse: isRev(def.variant), car: career.car, livery: career.livery,
+      cond: def.condition, weather: rules.stageWeather(def) }, params)}`);
+  };
 
   // read-only handle for tools/check (headless runs)
   const br = { vehicle, chase, model, sim, level, renderer, perf, backend, carId, look, gpu, auto, damage, contacts, menus, ready: false, paused: false,
+    bestGhost, rivals, get career() {
+      return career;
+    }, timeKey,
     weather: { name: weatherName, def: weather, ice: level.ice ?? [], marks: level.marks ?? null, precip } };
   (window as unknown as { __br: object }).__br = br;
 
@@ -577,8 +744,15 @@ async function runStage(play: PlaySetup | null) {
     if (run?.phase === 'results' && !resultsShown) {
       resultsShown = true;
       level.hud && (level.hud.panelOpen = false);
+      careerInfo = null;
+      commitCareer(run);
+      // quick stage / time attack: the rival ghosts that raced, with you (UE ResultRows)
+      const rivalRows = !career && rivals?.rivals.length
+        ? [{ name: 'you', time: run.total, dnf: run.dnf, driver: 0 }, ...rivals.rivals.map((r) => ({ name: r.name, time: r.time, dnf: r.dnf, driver: r.driver }))] : null;
       menus.showResults({ sub: subResults, dnf: run.dnf, reason: run.dnfReason, clock: run.clock, penalties: run.penalties, recovers: run.recovers,
-        total: run.total, best: play ? lastResult : null });
+        total: run.total, best: play && play.mode !== 'career' ? lastResult : null, career: careerInfo, rivals: rivalRows });
+      // headless career runs (tools/check/career.mjs): carry on by themselves
+      if (career && params.has('autocontinue')) setTimeout(() => careerHooks.continue(), 1500);
     } else if (run && run.phase !== 'results' && resultsShown) {
       resultsShown = false;
       menus.hideResults();
@@ -591,6 +765,21 @@ async function runStage(play: PlaySetup | null) {
 
     camState.forward.set(1, 0, 0).applyQuaternion(sim.renderRot);
     chase.update(dt, camState);
+    // the ghosts after the camera (their fades read it), then the HUD's slots: position, ghost delta, best time
+    if (run) {
+      const pm = progressM();
+      bestGhost?.frame(dt, run, sim.renderPos, chase.camera.position, pm);
+      rivals?.frame(dt, run, run.total, pm, sim.renderPos, chase.camera.position);
+      if (level.hud) {
+        const b = timeKey ? save?.best[timeKey]?.time ?? 0 : 0;
+        level.hud.feed = {
+          position: rivals?.positionText ?? null,
+          ghostDelta: bestGhost?.delta ?? null,
+          best: timeKey ? (b > 0 ? `best ${formatTime(b)}` : 'no best time yet') : null,
+        };
+      }
+      rivals?.drawLabels(chase.camera, innerWidth, innerHeight, paused || run.phase === 'results' || !ready);
+    }
     const c = renderer.domElement;
     look.update(dt, sim.renderPos, c.width, c.height);
 

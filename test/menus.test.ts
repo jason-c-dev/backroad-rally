@@ -35,6 +35,10 @@ describe('page flow', () => {
     expect(q).toContain('webgl=');
     expect(q).toContain('quality=low');
     expect(q).not.toContain('autopilot');
+    // a headless career run keeps the robot across pages, and the menus' URL stays a menu page
+    const auto = P('autocontinue=1&autopilot=120&timescale=4&menu=career');
+    expect(playQuery(setup, auto)).toContain('autopilot=120');
+    expect(pageKind(P(menuQuery(auto).slice(1)))).toBe('menu');
     expect(parsePlay(P(q.slice(1)))).toEqual(setup);
     expect(parsePlay(P('mode=quick'))).toEqual({ mode: 'quick', stage: 'finland', reverse: false, car: 'swift', livery: 0, cond: 'stage', weather: 'stage' });
     expect(parsePlay(P('mode=quick&stage=../x&car=<b>&livery=99'))).toMatchObject({ stage: 'finland', car: 'swift', livery: 31 });

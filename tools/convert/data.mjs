@@ -40,6 +40,10 @@ const FILES = [
   'garage.json',
   'career.json',
   ...['swift', 'pip', 'lama', 'quint', 'kaze'].map((id) => `cars/${id}.json`),
+  // slice 10: the rival ghosts' reference lines (one autopilot run per stage and direction, in the ghost codec:
+  // src/game/ghostCodec.ts) and the index of which car drove each
+  'rival_lines/index.json',
+  ...['finland', 'japan', 'alps', 'wales', 'arizona', 'vermont'].flatMap((id) => [`rival_lines/${id}_fwd.json`, `rival_lines/${id}_rev.json`]),
 ];
 
 // Overrides by file and path. Public names must stay our own (the repo is public), so source
