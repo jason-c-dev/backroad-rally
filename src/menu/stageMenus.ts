@@ -7,6 +7,9 @@ import { formatGap, ordinal, type TableRow } from '../game/career';
 import { MenuController, Row, controlsHint, el, firstPad, label, panel, setScale, spacer, table, u, type Screen } from './ui';
 import { settingsScreen, type SettingsHost } from './settingsPanel';
 
+/** The longest the curtain waits for auto quality to settle (s). */
+const HOLD_MAX_S = 14;
+
 export interface CurtainCfg {
   warmup_min_s: number;
   warmup_max_s: number;
@@ -63,7 +66,7 @@ export class StageMenus {
   ready = false;
   private warm = 0;
   private stable = 0;
-  private fading = false;
+  private fadingNow = false;
   private startPrev = false;
 
   constructor(private h: StageMenuHooks, private cfg: CurtainCfg) {
@@ -85,6 +88,11 @@ export class StageMenus {
     addEventListener('resize', () => setScale(this.root));
   }
 
+  /** The curtain has started to lift (the stage shows through from here). */
+  get fading(): boolean {
+    return this.fadingNow;
+  }
+
   get paused(): boolean {
     return this.open === 'pause' || this.open === 'settings';
   }
@@ -95,14 +103,17 @@ export class StageMenus {
 
   /**
    * Once a frame: the curtain stays until warmup_stable_frames frames in a row are under warmup_frame_ms (at
-   * least warmup_min_s, at most warmup_max_s), then fades over curtain_fade_s. Returns true once the run may go.
+   * least warmup_min_s, at most warmup_max_s; longer while `hold`), then fades over curtain_fade_s. Returns true once
+   * the run may go.
    */
-  frame(dt: number, frameMs: number): boolean {
+  frame(dt: number, frameMs: number, hold = false): boolean {
     const c = this.cfg;
-    if (!this.fading) {
+    if (!this.fadingNow) {
       this.warm += dt;
       this.stable = frameMs < c.warmup_frame_ms ? this.stable + 1 : 0;
-      if ((this.warm >= c.warmup_min_s && this.stable >= c.warmup_stable_frames) || this.warm >= c.warmup_max_s) this.fading = true;
+      // `hold`: auto quality is still choosing the tier (each step builds shaders), up to HOLD_MAX_S
+      const max = hold ? Math.max(c.warmup_max_s, HOLD_MAX_S) : c.warmup_max_s;
+      if ((this.warm >= c.warmup_min_s && this.stable >= c.warmup_stable_frames && !hold) || this.warm >= max) this.fadingNow = true;
     } else if (this.curtain > 0) {
       this.curtain = Math.max(0, this.curtain - dt / Math.max(c.curtain_fade_s, 0.01));
       if (this.curtain === 0) this.ready = true;

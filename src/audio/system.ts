@@ -3,6 +3,7 @@
 // Browser rules: the context is made suspended and resumes on the first key or click; M mutes; the
 // context suspends while the tab is hidden.
 import { GROUPS, attenuate, clamp, groupGain, voiceGain, type Attenuation, type Group, type MixJson } from './mix';
+import { publicUrl } from '../data';
 
 export interface SoundEntry {
   kind: 'engine' | 'sfx' | 'ui';
@@ -187,7 +188,7 @@ export class AudioSystem {
   }
 
   url(name: string, ext: string): string {
-    return `${this.base}audio/${name}.${ext}`;
+    return publicUrl(`audio/${name}.${ext}`, this.base);
   }
 
   /** Fetch and decode one sound (Opus, or AAC when this browser can't decode Opus). */

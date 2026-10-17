@@ -64,11 +64,14 @@ export class Fx {
       puff: new Pool('puff', size('puff', 512), icosphere(1, 0.12, rng, false), solid, rng),
       chip: new Pool('chip', size('chip', 1536), chipGeometry(), solid, rng),
       spark: new Pool('spark', size('spark', 384), sparkGeometry(), glow, rng),
-      flame: new Pool('flame', size('flame', 256), icosphere(0, 0.18, rng, false), glow, rng),
+      // flames in the blended queue after the dust (their own copy of the glow material): damage smoke rises over
+      // the engine, and drawn first the flames were hidden under it from the top-down camera
+      flame: new Pool('flame', size('flame', 256), icosphere(0, 0.18, rng, false), glowMaterial(true), rng),
     };
     this.pools.chip.mesh.castShadow = !!cfg.pools?.chip?.shadow;
     // after the scene's opaque and before its other blended things (the marks go first, at -1)
     this.pools.dust.mesh.renderOrder = 1;
+    this.pools.flame.mesh.renderOrder = 2;
     this.skids = new SkidMarks(Math.max(64, cfg.skid.max_segments), skidMaterial(false), cfg.skid.lift_cm / 100);
     fxU.holdS.value = cfg.skid.hold_s;
     fxU.fadeS.value = cfg.skid.fade_s;

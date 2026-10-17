@@ -26,7 +26,7 @@ import { Autopilot, DEFAULT_AUTOPILOT } from './game/autopilot';
 import { Look } from './look/look';
 import { CONDITIONS, pickCondition, type ConditionsJson } from './look/conditions';
 import { QUALITY } from './look/quality';
-import { AUTO_DEFAULTS, AutoQuality, LADDER, initialRung } from './look/autoQuality';
+import { AUTO_DEFAULTS, AutoQuality, initialRung, rememberRung, rememberedRung } from './look/autoQuality';
 // fx (slice 6)
 import { Fx } from './fx/fx';
 import type { FxJson } from './fx/config';
@@ -150,6 +150,8 @@ async function runStage(play: PlaySetup | null) {
   const carId = play?.car ?? params.get('car') ?? 'swift';
   const stageId = play?.stage ?? params.get('stage') ?? 'finland';
   const reverse = play ? play.reverse : params.get('dir') === 'reverse';
+  // start the small files the run reads later now, beside the stage's big ones (they were fetched one after another)
+  for (const f of ['fx.json', 'damage.json', 'hud.json', `rival_lines/${stageId}_${reverse ? 'rev' : 'fwd'}.json`]) void load(f).catch(() => {});
   const gameSettings = loadGameSettings();
   const display = loadDisplaySettings();
   const hudSettings = loadHudSettings(params);
@@ -328,14 +330,21 @@ async function runStage(play: PlaySetup | null) {
   /** Auto quality counts a frame as missed past one interval of the cap (a 30 fps cap isn't a miss at 33 ms). */
   const autoOpts = () => ({ ...AUTO_DEFAULTS, missMs: Math.max(AUTO_DEFAULTS.missMs, limiter.fps > 0 ? (1000 / limiter.fps) * 1.2 : 0) });
   limiter.fps = fpsLimit();
-  let auto = wantAuto() ? new AutoQuality(initialRung(gpu, innerWidth * innerHeight * renderer.getPixelRatio() ** 2), autoOpts()) : null;
+  // auto quality starts where the last visit to this stage settled (same GPU and screen), else from a guess; it
+  // settles behind the loading curtain (?autostart=<rung> forces the start, for checks)
+  const autoPixels = innerWidth * innerHeight * renderer.getPixelRatio() ** 2;
+  const autoKey = `${innerWidth}x${innerHeight}@${renderer.getPixelRatio().toFixed(2)}`;
+  const remembered = params.has('autostart') ? null : rememberedRung(gpu, autoKey, `stage:${stageId}`);
+  const autoStart = params.has('autostart') ? Number(params.get('autostart')) : remembered ?? initialRung(gpu, autoPixels);
+  // a remembered tier held here before: one clean window confirms it (two for a guess)
+  let auto = wantAuto() ? new AutoQuality(autoStart, { ...autoOpts(), settleGood: remembered !== null ? 1 : 2 }) : null;
   const pinnedTier = () => (pinnedByUrl ? qParam! : display.quality === 'auto' ? 'high' : display.quality);
   let condIndex = Math.max(0, CONDITIONS.indexOf(pickCondition(conditions, play ? play.cond : params.get('cond'), stageId, reverse) as (typeof CONDITIONS)[number]));
   const look = new Look(renderer, scene, chase.camera, conditions, {
     stage: stageId,
     condition: CONDITIONS[condIndex],
-    quality: auto ? LADDER[auto.rung].tier : pinnedTier(),
-    scale: pinnedScale() ?? (auto ? LADDER[auto.rung].scale : 1),
+    quality: auto ? auto.current.tier : pinnedTier(),
+    scale: pinnedScale() ?? (auto ? auto.current.scale : 1),
     upscale: params.get('upscale') === 'fsr' ? 'fsr' : 'browser',
     post: params.get('post') !== '0',
     override: lookOverrides(params),
@@ -368,8 +377,9 @@ async function runStage(play: PlaySetup | null) {
   actions.applyDisplay = () => {
     limiter.fps = fpsLimit();
     if (wantAuto()) {
+      // switched to auto in the settings: it settles while the menu is open, then plays on
       if (!auto) auto = new AutoQuality(initialRung(gpu, innerWidth * innerHeight * (renderer.getPixelRatio() / Math.max(look.scale, 0.01)) ** 2), autoOpts());
-      look.setQuality(LADDER[auto.rung].tier, pinnedScale() ?? LADDER[auto.rung].scale);
+      look.setQuality(auto.current.tier, pinnedScale() ?? auto.current.scale);
     } else {
       auto = null;
       look.setQuality(pinnedTier(), pinnedScale() ?? 1);
@@ -437,8 +447,6 @@ async function runStage(play: PlaySetup | null) {
       crowdPhase, cameraPos, stageLevel?.drawDistance ?? 2);
     breakables?.update(dt, vehicle, run?.phase ?? 'running');
   };
-  fx.warmup();
-  crowd?.warmup();
   (window as unknown as { __fx: object }).__fx = { fx, crowd, breakables, carEvents, events: fxEvents, precip };
   // --- /fx ---
   // --- damage ---
@@ -563,17 +571,25 @@ async function runStage(play: PlaySetup | null) {
   look.update(0, sim.renderPos, innerWidth, innerHeight);
   const stageOf = (level as { stage?: Stage }).stage;
   const t0 = performance.now();
-  // the ghosts' one shader is built now too: drawn (invisible, 0.1 % of their pixels) in front of the camera
-  rivals?.warm(true, sim.renderPos);
-  if (bestGhost?.mesh) {
-    bestGhost.mesh.visible = true;
-    bestGhost.mesh.position.copy(sim.renderPos);
-    bestGhost.mesh.userData.ghostOpacity = 0.001;
-  }
-  if (stageOf) stageOf.warmup(() => look.render());
-  else look.render();
-  rivals?.warm(false, sim.renderPos);
-  if (bestGhost?.mesh) bestGhost.mesh.visible = false;
+  /** Draw everything once (the stage's out-of-view meshes, effect pools, ghosts): every pipeline of this tier built. */
+  const warmAll = () => {
+    // the ghosts' one shader is built now too: drawn (invisible, 0.1 % of their pixels) in front of the camera
+    rivals?.warm(true, sim.renderPos);
+    if (bestGhost?.mesh) {
+      bestGhost.mesh.visible = true;
+      bestGhost.mesh.position.copy(sim.renderPos);
+      bestGhost.mesh.userData.ghostOpacity = 0.001;
+    }
+    fx.warmup();
+    crowd?.warmup();
+    if (stageOf) stageOf.warmup(() => look.render());
+    else look.render();
+    rivals?.warm(false, sim.renderPos);
+    if (bestGhost?.mesh) bestGhost.mesh.visible = false;
+  };
+  warmAll();
+  /** The tier warmAll last built for: auto quality settling on another one draws everything again, behind the curtain. */
+  let warmedTier = look.qualityName;
   if (stageOf) stageOf.timings.warmup = performance.now() - t0;
   const controls = new Controls();
   const hud = new FrameHud(document.body, backend);
@@ -723,8 +739,17 @@ async function runStage(play: PlaySetup | null) {
     const frameDt = now - last;
     const realDt = Math.min(frameDt / 1000, 0.1);
     last = now;
-    // the curtain holds the run (no physics steps) until the stage draws steadily, then fades
-    const ready = menus.frame(realDt, frameDt);
+    // the curtain holds the run (no physics steps) until the stage draws steadily and auto quality has settled
+    // (it picks the tier behind the curtain, so the player sees no step), then fades
+    if (auto && !auto.playing && auto.settled && look.qualityName !== warmedTier && !menus.fading) {
+      warmAll();
+      warmedTier = look.qualityName;
+    }
+    const ready = menus.frame(realDt, frameDt, !!auto && (!auto.settled || look.qualityName !== warmedTier));
+    if (auto && !auto.playing && (menus.fading || paused)) {
+      auto.play();
+      if (!params.has('autostart')) rememberRung(gpu, autoKey, `stage:${stageId}`, auto.rung);
+    }
     br.ready = ready;
     br.paused = paused;
     const running = ready && !paused;
@@ -780,6 +805,13 @@ async function runStage(play: PlaySetup | null) {
       }
       rivals?.drawLabels(chase.camera, innerWidth, innerHeight, paused || run.phase === 'results' || !ready);
     }
+    // auto quality before drawing: a new render scale resizes (and so clears) the canvas, and drawing in the same
+    // frame means the compositor never shows it empty
+    if (auto) {
+      const r = auto.frame(frameDt, perf.gpu);
+      if (r !== null) look.setQuality(r.tier, pinnedScale() ?? r.scale);
+      br.auto = auto;
+    }
     const c = renderer.domElement;
     look.update(dt, sim.renderPos, c.width, c.height);
 
@@ -800,11 +832,6 @@ async function runStage(play: PlaySetup | null) {
       void renderer.resolveTimestampsAsync('render').then((ms) => {
         if (typeof ms === 'number' && ms > 0) perf.gpu = ms;
       });
-    }
-    if (auto) {
-      const r = auto.frame(frameDt, perf.gpu);
-      if (r !== null) look.setQuality(LADDER[r].tier, pinnedScale() ?? LADDER[r].scale);
-      br.auto = auto;
     }
     if (perf.frames.length > 100000) perf.frames.splice(0, 50000);
     hud.frame(now, c.width, c.height);

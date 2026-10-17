@@ -7,6 +7,9 @@ import { uniform } from 'three/tsl';
 export const TINTED = ['Grass', 'Gravel', 'Tarmac', 'Dirt', 'Rock', 'Water', 'Foliage', 'Flat'] as const;
 export type Tinted = (typeof TINTED)[number];
 
+/** dev: ?idlenod=<deg> exaggerates the animals' nod (checks). */
+const IDLE_NOD = typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('idlenod');
+
 const tint = () => uniform(new THREE.Vector4(1, 1, 1, 1));
 
 export const U = {
@@ -41,4 +44,9 @@ export const U = {
   canopyLight: uniform(0.75),
   /** 1 = dithered fades move with the frame (interleaved gradient noise + frame offset), 0 = fixed. */
   ditherAnimate: uniform(1),
+  /**
+   * Grazing animals (stage_runtime.json features.idle): nod (rad), bob (m), the slowest and fastest cycle (Hz). The
+   * original moved each instance on the CPU at 20 Hz within 120 m of the car; here the vertex shader does it.
+   */
+  idle: uniform(new THREE.Vector4(((Number(IDLE_NOD) || 4) * Math.PI) / 180, 0.015, 0.12, 0.3)),
 };

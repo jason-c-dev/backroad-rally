@@ -17,7 +17,12 @@ export async function createRenderer(params: URLSearchParams, trackTimestamp: bo
   const gpuAdapter = !params.has('webgl') && 'gpu' in navigator
     ? await (navigator as unknown as { gpu: { requestAdapter(o: object): Promise<unknown> } }).gpu.requestAdapter({ powerPreference: 'high-performance' }).catch(() => null)
     : null;
-  const forceWebGL = !gpuAdapter;
+  // a software WebGPU adapter (SwiftShader: Chrome with WebGPU switched on, on an integrated GPU it can't use for it)
+  // ran the game at 2-6 fps, where WebGL2 on the same machine gets the hardware and 60: use WebGL2 then
+  const info = (gpuAdapter as { info?: { vendor?: string; architecture?: string; description?: string; isFallbackAdapter?: boolean }; isFallbackAdapter?: boolean } | null);
+  const software = !!info && (!!info.isFallbackAdapter || !!info.info?.isFallbackAdapter
+    || /swiftshader|llvmpipe|software/i.test(`${info.info?.vendor ?? ''} ${info.info?.architecture ?? ''} ${info.info?.description ?? ''}`));
+  const forceWebGL = !gpuAdapter || software;
   const canvas = document.createElement('canvas');
   const context = forceWebGL
     ? canvas.getContext('webgl2', { powerPreference: 'high-performance', antialias: true, alpha: true, depth: true, stencil: false }) ?? undefined
@@ -35,13 +40,16 @@ export async function createRenderer(params: URLSearchParams, trackTimestamp: bo
 
 /** The GPU the page landed on (hybrid laptops: headless Chrome picks the integrated one unless told). */
 export function gpuName(renderer: THREE.WebGPURenderer): string {
-  const b = renderer.backend as { gl?: WebGL2RenderingContext; adapter?: { info?: { vendor?: string; architecture?: string; description?: string } } };
+  type Info = { vendor?: string; architecture?: string; device?: string; description?: string };
+  const b = renderer.backend as { gl?: WebGL2RenderingContext; adapter?: { info?: Info }; device?: { adapterInfo?: Info } };
   if (b.gl) {
     const ext = b.gl.getExtension('WEBGL_debug_renderer_info');
     return ext ? String(b.gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : 'webgl2';
   }
-  const i = b.adapter?.info;
-  return i ? [i.vendor, i.architecture, i.description].filter(Boolean).join(' ') : 'webgpu';
+  // three keeps no adapter; the device has its info (Chrome: "nvidia blackwell", "google swiftshader")
+  const i = b.adapter?.info ?? b.device?.adapterInfo;
+  const name = i ? [i.vendor, i.architecture, i.device, i.description].filter(Boolean).join(' ') : '';
+  return name ? `webgpu ${name}` : 'webgpu';
 }
 
 /** The tilt-shift options of the look from camera.json dof. */

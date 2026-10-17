@@ -94,6 +94,12 @@ options.
 - **Rain and snow:** the grip, the handling, the look, the effects and the sound change
   with the weather. Snow has ice on the tarmac.
 - Dust, skid marks, damage, a full HUD, engine sound, crowds and music.
+- **Runs on a laptop:** auto quality picks the graphics tier behind the loading screen,
+  so the picture does not change or stop when the stage starts. It holds 60 fps on an
+  integrated GPU. Chrome (WebGPU or WebGL2) and Firefox (WebGL2) work.
+- **Fast updates:** each data file has a content hash in its URL, so a reload after a
+  new version gets the new files at once. Models are compressed, and the menus get the
+  files for the next stage in the background.
 
 ## How AI built this
 

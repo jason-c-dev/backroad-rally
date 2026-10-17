@@ -508,12 +508,14 @@ export class RivalGhosts {
   }
 
   /** Builds the rivals for a run: their warp, offsets and ghost cars (shared with the last run where they match). */
+  private setupGen = 0;
+
   async setup(line: RefLine | null, picks: RivalPick[], cars: CarData[]): Promise<void> {
-    const old = this.rivals;
-    this.rivals = [];
-    this.line = line;
+    const gen = ++this.setupGen;
     if (!line || !picks.length || !cars.length) {
-      for (const r of old) this.drop(r);
+      for (const r of this.rivals) this.drop(r);
+      this.rivals = [];
+      this.line = line;
       this.status = !line ? 'no reference line: no rival ghosts' : 'off';
       return;
     }
@@ -525,6 +527,10 @@ export class RivalGhosts {
       const j = srng.randRange(0, i);
       [slots[i], slots[j]] = [slots[j], slots[i]];
     }
+    // the new field is built aside and swapped in at the end: a restart's re-pick (quick stage, time attack) keeps the
+    // old ghosts on the grid until the new meshes exist, instead of an empty intro while they load
+    const next: RivalRun[] = [];
+    const reuse = new Map<RivalRun, RivalRun>(); // new -> old run whose mesh it takes over
     for (let k = 0; k < picks.length; k++) {
       const p = picks[k];
       const car = cars[(p.driver - 1) % cars.length];
@@ -534,17 +540,27 @@ export class RivalGhosts {
       const r: RivalRun = {
         ...p, car: car.id, livery, tint, ...buildWarp(line, cfg, p, slots[k], picks.length), mesh: null, pos: new THREE.Vector3(), shown: false, labelAlpha: 0,
       };
-      const same = old.find((o) => o.mesh && o.driver === r.driver && o.car === r.car && o.livery === r.livery);
-      if (same) {
-        r.mesh = same.mesh;
-        same.mesh = null;
-      } else {
+      const same = this.rivals.find((o) => o.mesh && o.driver === r.driver && o.car === r.car && o.livery === r.livery && ![...reuse.values()].includes(o));
+      if (same) reuse.set(r, same);
+      else {
         r.mesh = await ghostMesh(car, { kind: 'livery', livery: plain[livery] ?? car.liveries[0], tint, tintMix: cfg.tint_mix, trim: cfg.trim_color });
         r.mesh.userData.ghostGlow = cfg.glow;
         this.scene.add(r.mesh);
       }
-      this.rivals.push(r);
+      next.push(r);
     }
+    // a newer setup started meanwhile (two restarts in a row): this one is stale
+    if (gen !== this.setupGen) {
+      for (const r of next) if (!reuse.has(r)) this.drop(r);
+      return;
+    }
+    const old = this.rivals;
+    for (const [r, o] of reuse) {
+      r.mesh = o.mesh;
+      o.mesh = null;
+    }
+    this.rivals = next;
+    this.line = line;
     for (const r of old) this.drop(r);
     this.status = `${this.rivals.length} rivals on ${line.stage}_${line.rev ? 'rev' : 'fwd'}`;
   }

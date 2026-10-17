@@ -6,7 +6,7 @@ import * as THREE from 'three/webgpu';
 import type RAPIER from '@dimforge/rapier3d-compat';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
-import { assetUrl } from '../data';
+import { loadGlb, publicUrl } from '../data';
 import { Road, type RoadData } from '../sim/road';
 import type { SurfaceQuery } from '../sim/vehicle';
 import type { Surface } from '../sim/tuning';
@@ -100,6 +100,32 @@ function splitColour(g: THREE.BufferGeometry): void {
   }
   g.setAttribute('color', new THREE.BufferAttribute(rgb, 3));
   g.setAttribute('sway', new THREE.BufferAttribute(sway, 1));
+}
+
+/**
+ * Vertex-colour saturation per env mesh, a port fix: the sakura canopies are authored pastel (#F0B4C8 / #F8D4E0, the
+ * original's veg_deciduous.py), and there its global illumination left most of each canopy in a deep magenta shade;
+ * with a hemisphere light and the lifted canopy shadow (materials.ts canopyLight) they came out pale (green channel
+ * ~128 against ~89 at the same spot). [saturation (above 1 pushes the colour away from its grey), value (a
+ * multiplier on the authored colour, which the look decodes twice)]; applied once at load.
+ */
+const SAKURA = sakuraTone();
+const VERTEX_SATURATION: Record<string, [number, number]> = { SM_Sakura_A: SAKURA, SM_Sakura_B: SAKURA };
+/** [saturation, value] for the sakura (?sakura=sat,value to tune). */
+function sakuraTone(): [number, number] {
+  const v = typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('sakura')?.split(',').map(Number);
+  return v && v.length === 2 ? [v[0], v[1]] : [2, 0.82];
+}
+
+function saturateColour(g: THREE.BufferGeometry, [k, value]: [number, number]): void {
+  const c = g.getAttribute('color') as THREE.BufferAttribute | undefined;
+  if (!c) return;
+  for (let i = 0; i < c.count; i++) {
+    const r = c.getX(i) * value, gg = c.getY(i) * value, b = c.getZ(i) * value;
+    const l = 0.2126 * r + 0.7152 * gg + 0.0722 * b;
+    c.setXYZ(i, Math.min(Math.max(l + (r - l) * k, 0), 1), Math.min(Math.max(l + (gg - l) * k, 0), 1), Math.min(Math.max(l + (b - l) * k, 0), 1));
+  }
+  c.needsUpdate = true;
 }
 
 /** One mesh (one level of detail) of a chunk: a mesh per material slot, sharing the instance attributes. */
@@ -211,13 +237,12 @@ export class Stage {
 
   static async load(id: string, catalog: Record<string, CatalogEntry>, runtime: StageRuntimeJson,
     rapier: typeof RAPIER, world: RAPIER.World): Promise<Stage> {
-    const base = import.meta.env.BASE_URL;
     const t0 = performance.now();
     const [json, bin, stageGltf, envGltf] = await Promise.all([
-      fetch(`${base}data/stages/${id}.json`).then((r) => r.json() as Promise<StageJson>),
-      fetch(`${base}data/stages/${id}.bin`).then((r) => r.arrayBuffer()),
-      loader().loadAsync(assetUrl(`stages/${id}.glb`)),
-      loader().loadAsync(assetUrl(`env/env_${id}.glb`)),
+      fetch(publicUrl(`data/stages/${id}.json`)).then((r) => r.json() as Promise<StageJson>),
+      fetch(publicUrl(`data/stages/${id}.bin`)).then((r) => r.arrayBuffer()),
+      loadGlb(loader(), `assets/stages/${id}.glb`),
+      loadGlb(loader(), `assets/env/env_${id}.glb`),
     ]);
     const stage = new Stage(json, await decodeInstances(json.bin, bin), catalog, runtime);
     const t1 = performance.now();
@@ -325,6 +350,7 @@ export class Stage {
         }
         g.applyMatrix4(m.matrixWorld);
         splitColour(g);
+        if (VERTEX_SATURATION[node.name]) saturateColour(g, VERTEX_SATURATION[node.name]);
         if (!g.getAttribute('sway')) g.setAttribute('sway', new THREE.BufferAttribute(new Float32Array(pos.count), 1));
         g.computeBoundingSphere();
         parts.push({ geometry: g, slot: slotName(m.material as THREE.Material) });
@@ -449,6 +475,7 @@ export class Stage {
         for (let i = offset; i < offset + count; i++) if (this.road.distanceTo(bin[i * F], bin[i * F + 2]) > nearRoad) this.noShadow[i] = 1;
       }
       const fadeMesh = fadeMeshes.has(baseMesh);
+      const idle = idleCats.has(cat.category);
       // animals (features.idle.categories): where the location one-shots play (cowbells, sheep)
       if (idleCats.has(cat.category)) {
         for (let i = offset; i < offset + count; i++) this.animals.push({ x: bin[i * F], y: bin[i * F + 1], z: bin[i * F + 2] });
@@ -484,7 +511,8 @@ export class Stage {
             // inside it as they are compacted, so it is set once and never recomputed
             g.boundingSphere = sphere;
             // fade_meshes (the covered bridge): their Flat parts dither out between the camera and the car
-            const slot = part.slot === 'Foliage' && lodded && n >= FAR_LEVEL ? 'FoliageFar' : fadeMesh && part.slot === 'Flat' ? 'FlatFade' : part.slot;
+            const slot = part.slot === 'Foliage' && lodded && n >= FAR_LEVEL ? 'FoliageFar' : fadeMesh && part.slot === 'Flat' ? 'FlatFade'
+              : idle && part.slot === 'Flat' ? 'FlatIdle' : part.slot;
             const matKey = mats[slot] ? `${slot}${solid ? '!' : ''}` : `Flat${solid ? '!' : ''}`;
             const im = new THREE.Mesh(g, mats[matKey]);
             im.userData.mat = matKey;
@@ -564,6 +592,16 @@ export class Stage {
    * (those builds were 60-380 ms hitches while driving).
    */
   warmup(render: () => void): void {
+    // every other mesh of the stage too (tiles, water, props): out of view they would build their pipelines (and their
+    // shadow pipelines) the first time they come into view, mid-run (the finland lake: a 100-150 ms hitch)
+    const culled: THREE.Object3D[] = [];
+    const inst = new Set<THREE.Object3D>(this.groups.flatMap((g) => g.all.flatMap((l) => l.parts)));
+    this.group.traverse((o) => {
+      if ((o as THREE.Mesh).isMesh && o.frustumCulled && !inst.has(o as THREE.Mesh)) {
+        o.frustumCulled = false;
+        culled.push(o);
+      }
+    });
     for (const g of this.groups) {
       for (const l of g.all) {
         this.writeInstance(l, 0, g.ids[0], 1);
@@ -579,6 +617,7 @@ export class Stage {
     for (const g of this.groups) {
       for (const l of g.all) for (const im of l.parts) im.frustumCulled = true;
     }
+    for (const o of culled) o.frustumCulled = true;
     this.updateInstances(this.lastUpdate, true);
   }
 

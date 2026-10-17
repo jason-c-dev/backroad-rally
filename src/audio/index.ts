@@ -6,7 +6,7 @@ import * as THREE from 'three';
 import type { Vehicle } from '../sim/vehicle';
 import type { RoadTracker } from '../sim/road';
 import type { Stage } from '../world/stage';
-import { load } from '../data';
+import { load, publicUrl } from '../data';
 import type { MixJson } from './mix';
 import { AudioSystem, type AudioManifest } from './system';
 import { CarAudio } from './carAudio';
@@ -37,7 +37,7 @@ function wireUiSounds(sys: AudioSystem): void {
 
 async function loadMixFiles(): Promise<{ manifest: AudioManifest; mix: MixJson; base: string }> {
   const base = import.meta.env.BASE_URL;
-  const get = <T>(f: string) => fetch(`${base}audio/${f}`).then((r) => {
+  const get = <T>(f: string) => fetch(publicUrl(`audio/${f}`, base)).then((r) => {
     if (!r.ok) throw new Error(`audio/${f}: HTTP ${r.status}`);
     return r.json() as Promise<T>;
   });
@@ -125,7 +125,7 @@ export interface AudioHandle {
 export async function startAudio(o: AudioOpts): Promise<AudioHandle | null> {
   if (o.params.get('audio') === '0' || !('AudioContext' in window || 'webkitAudioContext' in window)) return null;
   const base = import.meta.env.BASE_URL;
-  const get = <T>(f: string) => fetch(`${base}audio/${f}`).then((r) => {
+  const get = <T>(f: string) => fetch(publicUrl(`audio/${f}`, base)).then((r) => {
     if (!r.ok) throw new Error(`audio/${f}: HTTP ${r.status}`);
     return r.json() as Promise<T>;
   });
