@@ -3,6 +3,7 @@
 // turns it into plain numbers in three's units: directions in three axes, colours linear, fog per
 // metre. Colours in the file: "#hex" is sRGB (decoded to linear), arrays are linear already.
 import * as THREE from 'three/webgpu';
+import { applyLook, type WeatherDef } from '../game/weather';
 
 type Json = Record<string, unknown>;
 
@@ -99,6 +100,16 @@ export interface Condition {
     nightGlow: number;
     wind: number;
     tints: Record<string, number[]>;
+    /** Weather blends (weather.json mpc, 0 in clear weather): wet 0..1, snow cover 0..1, precipitation brightness. */
+    wet: number;
+    snow: number;
+    precipLight: number;
+    /** Snow colour (linear rgb), packed-snow road colour (rgb, a = road cover), snow params (normal z low, normal
+     * z high, edge noise, foliage cover) and wet params (road darken, ground darken, road roughness, ground roughness). */
+    snowColor: number[];
+    snowRoadColor: number[];
+    snowParams: number[];
+    wetParams: number[];
   };
   headlights: null | {
     pitch: number;
@@ -121,9 +132,11 @@ export function pickCondition(json: ConditionsJson, asked: string | null, stage:
   return json.default_condition;
 }
 
-export function resolveCondition(json: ConditionsJson, name: string, stage: string): Condition {
+/** A condition, with the weather's look on top when one is given (weather.json look ops, UE ApplyLook). */
+export function resolveCondition(json: ConditionsJson, name: string, stage: string, weather?: WeatherDef | null): Condition {
   let c = deepMerge(json.defaults, json.conditions[name]);
   c = deepMerge(c, json.stage_overrides[stage]?.[name]);
+  if (weather) c = applyLook(c, weather, name);
   const sun = c.sun as Json, sunP = (sun.props ?? {}) as Json;
   const sky = ((c.sky_light as Json)?.props ?? {}) as Json;
   const fog = (c.fog as Json) ?? {}, fp = (fog.props ?? {}) as Json;
@@ -174,6 +187,13 @@ export function resolveCondition(json: ConditionsJson, name: string, stage: stri
       nightGlow: num(mpc.NightGlow, 0),
       wind: num(mpc.Wind, 1),
       tints: Object.fromEntries(Object.entries(mpc).filter(([k]) => k.startsWith('Tint')).map(([k, v]) => [k.slice(4), vec4(v)])),
+      wet: num(mpc.Wet, 0),
+      snow: num(mpc.Snow, 0),
+      precipLight: num(mpc.PrecipLight, 1),
+      snowColor: vec4(mpc.SnowColor, [0.8, 0.87, 0.98, 1]),
+      snowRoadColor: vec4(mpc.SnowRoadColor, [0.7, 0.72, 0.77, 0.9]),
+      snowParams: vec4(mpc.SnowParams, [0.5, 0.78, 0.25, 0.85]),
+      wetParams: vec4(mpc.WetParams, [0.5, 0.78, 0.16, 0.55]),
     },
     headlights: hl?.on ? {
       pitch: num(hl.pitch_deg, 0),

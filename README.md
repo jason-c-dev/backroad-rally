@@ -65,6 +65,7 @@ Play in the browser: **<https://jason-c-dev.github.io/backroad-rally/>**
 | Enter | Restart the stage |
 | C | Camera |
 | K | Next time of day |
+| J | Next weather |
 | M / V | Mute / volumes |
 | N / B | Next stage / other direction |
 
@@ -80,6 +81,8 @@ options.
   (1970s, mid-engine), quint (1980s, four-wheel drive turbo) and kaze (1990s, four-wheel
   drive turbo).
 - **Five times of day** (K): morning, afternoon, sunset, night and fog.
+- **Rain and snow** (J): the grip, the handling, the look, the effects and the sound change
+  with the weather. Snow has ice on the tarmac.
 - Dust, skid marks, damage, a full HUD, engine sound, crowds and music.
 
 ## How AI built this

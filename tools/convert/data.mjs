@@ -33,6 +33,7 @@ const FILES = [
   'fx.json',
   'damage.json',
   'hud.json',
+  'weather.json',
   ...['swift', 'pip', 'lama', 'quint', 'kaze'].map((id) => `cars/${id}.json`),
 ];
 
@@ -47,6 +48,12 @@ const OVERRIDES = {
   'fx.json': {
     'skid.surfaces.gravel': { color: '#1A1612', opacity: 0.9 },
     'skid.surfaces.dirt': { color: '#1A1612', opacity: 0.85 },
+  },
+  // The same in rain: the original's rain browns (#4A3828, #3E2E20) are darker than its clear ones but
+  // lighter than the port's clear override, so wet gravel would get lighter marks than dry gravel.
+  'weather.json': {
+    'weathers.rain.fx.skid.surfaces.gravel': { color: '#1A1612', opacity: 0.9 },
+    'weathers.rain.fx.skid.surfaces.dirt': { color: '#1A1612', opacity: 0.85 },
   },
 };
 

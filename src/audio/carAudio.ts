@@ -27,6 +27,8 @@ export class CarAudio {
   private readonly exhaust = new Vector3();
   /** Engine voice level of the last frame (engine volume x limiter), for the readout. */
   level = 0;
+  /** The weather turns the dry roll down (weather.json audio.dry_surface_scale: rain 0.6, snow 0.35). */
+  dryScale = 1;
   /** Audio-clock times of the last limiter cuts scheduled (tools/check/audio.mjs reads the rate), and skips. */
   readonly cutLog: number[] = [];
   cutSkips = 0;
@@ -100,8 +102,8 @@ export class CarAudio {
 
     // tyres
     const s = surfaceMix(sys.mix, v.wheels, v.speedKmh);
-    this.roll.gravel.set(s.rollGravel, s.pitchGravel, dt);
-    this.roll.tarmac.set(s.rollTarmac, s.pitchTarmac, dt);
+    this.roll.gravel.set(s.rollGravel * this.dryScale, s.pitchGravel, dt);
+    this.roll.tarmac.set(s.rollTarmac * this.dryScale, s.pitchTarmac, dt);
     this.roll.skidGravel.set(s.skidGravel, s.skidPitchGravel, dt);
     this.roll.skidTarmac.set(s.skidTarmac, s.skidPitchTarmac, dt);
   }

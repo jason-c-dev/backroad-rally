@@ -165,6 +165,30 @@ export class AudioSystem {
     return groupGain(this.mix, g, this.volumes.groups[g]);
   }
 
+  /**
+   * The weather's muffling (snow: 3500 Hz on crowd, sfx and surface): a one-pole low-pass after each listed
+   * group, like the original's per-sound low-pass filter (UE FInterpolatedLPF: b1 = exp(-2 pi fc / fs)).
+   */
+  setMuffle(hz: number, groups: readonly string[]): void {
+    for (const [g, f] of this.muffles) {
+      this.groups[g].disconnect(f);
+      f.disconnect();
+      this.groups[g].connect(this.master);
+    }
+    this.muffles.clear();
+    if (!(hz > 0)) return;
+    const b1 = Math.exp((-2 * Math.PI * Math.min(hz, this.ctx.sampleRate / 2)) / this.ctx.sampleRate);
+    for (const g of groups) {
+      if (!(GROUPS as readonly string[]).includes(g)) continue;
+      const f = this.ctx.createIIRFilter([1 - b1], [1, -b1]);
+      const node = this.groups[g as Group];
+      node.disconnect(this.master);
+      node.connect(f).connect(this.master);
+      this.muffles.set(g as Group, f);
+    }
+  }
+  readonly muffles = new Map<Group, IIRFilterNode>();
+
   /** Push the user's volumes to the group and master nodes (and save them). */
   applyVolumes(instant = false, save = false): void {
     const t = this.ctx.currentTime;

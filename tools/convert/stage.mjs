@@ -47,9 +47,12 @@ const rotY = (yawDeg) => (-yawDeg * Math.PI) / 180;
 
 // road: struct of arrays
 const surfaces = [];
-const road = { p: [], half_width: [], s: [], surface: [], surfaces };
+// y_cm: the centreline height at the source's own precision (cm). Only the puddle placement reads it: the
+// metres in p are rounded to 1 cm, which makes ties on flat road and other low points than the original's.
+const road = { p: [], half_width: [], s: [], surface: [], surfaces, y_cm: [] };
 for (const c of d.centreline) {
   road.p.push(...pos(c.p));
+  road.y_cm.push(c.p[2] ?? 0);
   road.half_width.push(r2(c.half_width / 100));
   road.s.push(r2(c.s));
   let k = surfaces.indexOf(c.surface);

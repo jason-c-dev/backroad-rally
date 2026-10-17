@@ -14,6 +14,8 @@ import { StageAudio, bridgeSpans } from './stageAudio';
 import { AudioUi } from './ui';
 import { startRecorder, type Recording } from './recorder';
 import { events } from '../game/events';
+import type { WeatherAudioJson } from '../game/weather';
+import { WeatherAudio } from './weatherAudio';
 
 export interface AudioOpts {
   vehicle: Vehicle;
@@ -25,12 +27,15 @@ export interface AudioOpts {
   camera: THREE.Camera;
   isNight(): boolean;
   params: URLSearchParams;
+  /** The weather's sound (weather.json audio); null or clear = none. */
+  weather?: WeatherAudioJson | null;
 }
 
 export interface AudioHandle {
   sys: AudioSystem;
   car: CarAudio;
   stage: StageAudio;
+  weather: WeatherAudio | null;
   ui: AudioUi;
   rec: Recording | null;
 }
@@ -61,6 +66,12 @@ export async function startAudio(o: AudioOpts): Promise<AudioHandle | null> {
     bridges = bridgeSpans(st.road, boxes);
   }
   const car = new CarAudio(sys, o.vehicle, o.carId);
+  // weather: the dry roll turned down, its own loops, its ambience bed and (snow) the low-pass on some groups
+  const wa = o.weather ?? null;
+  car.dryScale = wa?.dry_surface_scale ?? 1;
+  const weatherAmbience = wa?.ambience ? { sound: wa.ambience, volume: wa.ambience_volume ?? 1 } : null;
+  const weather = wa ? new WeatherAudio(sys, o.vehicle, wa) : null;
+  sys.setMuffle(wa?.muffle_hz ?? 0, wa?.muffle_groups ?? []);
   const stage = new StageAudio(sys, {
     stageId: o.stageId,
     location: st?.json.location ?? o.stageId,
@@ -73,9 +84,10 @@ export async function startAudio(o: AudioOpts): Promise<AudioHandle | null> {
     animals: st?.animals ?? [],
     phase: () => o.level.run?.phase ?? 'running',
     isNight: o.isNight,
+    weatherAmbience,
   });
   stage.music.onTrack = (title) => ui.show(`♪ ${title}`);
-  void sys.loadAll([...CarAudio.sounds(sys, o.carId), ...StageAudio.sounds(sys, { stageId: o.stageId })]);
+  void sys.loadAll([...CarAudio.sounds(sys, o.carId), ...StageAudio.sounds(sys, { stageId: o.stageId, weatherAmbience }), ...WeatherAudio.sounds(wa)]);
 
   // the context resumes on the first key or click (and the music starts then)
   sys.onUnlock = () => stage.music.start();
@@ -93,7 +105,7 @@ export async function startAudio(o: AudioOpts): Promise<AudioHandle | null> {
     if (e.code === 'Comma') stage.music.step(-1);
   });
 
-  const handle: AudioHandle = { sys, car, stage, ui, rec: null };
+  const handle: AudioHandle = { sys, car, stage, weather, ui, rec: null };
   if (recording) {
     const v = o.vehicle;
     const log: string[] = [];
@@ -133,6 +145,7 @@ export async function startAudio(o: AudioOpts): Promise<AudioHandle | null> {
     if (dt > 0) {
       car.update(dt);
       stage.update(dt);
+      weather?.update(dt);
     }
     ui.frame();
     requestAnimationFrame(frame);

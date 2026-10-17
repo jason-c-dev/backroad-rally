@@ -16,7 +16,7 @@ import {
   positionWorld, pow, saturate, screenCoordinate, sin, smoothstep, step, uniform, vec3, viewportDepthTexture,
 } from 'three/tsl';
 import { U } from '../look/uniforms';
-import { grade, srgbToLinear } from '../look/materials';
+import { grade, materialWeather, srgbToLinear } from '../look/materials';
 
 type N = THREE.Node<'float'>;
 type V3 = THREE.Node<'vec3'>;
@@ -74,6 +74,13 @@ export function dustMaterial(o: DustOptions): THREE.MeshBasicNodeMaterial {
   m.positionNode = placed();
   const c = fxC();
   m.colorNode = c.rgb.mul((fxU.light as unknown as V3).add(emissiveTerm(0.65)));
+  if (materialWeather.kind === 'snow') {
+    // snow powder: white puffs on white snow only read with the original's lit shading, so shade the puff
+    // sphere by how much it faces up (weather only: clear-weather dust keeps its look)
+    const centre = fxA().xyz.toVarying('v_dustCentreC') as unknown as V3;
+    const up = saturate(normalize(positionWorld.sub(centre)).y.mul(0.5).add(0.5));
+    m.colorNode = (m.colorNode as V3).mul(mix(float(0.55), float(1.05), up));
+  }
   m.opacityNode = Fn(() => {
     const a = saturate(c.w);
     // facing on the smooth sphere: its normal is the direction from the puff's centre

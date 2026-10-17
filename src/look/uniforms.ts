@@ -23,9 +23,18 @@ export const U = {
   camPos: uniform(new THREE.Vector3(0, 1000, 0)),
   /** Foliage beyond this camera distance doesn't sway (m). */
   swayRange: uniform(90),
-  /** Weather blends (slice 8): kept here so the materials have one home for them. */
+  /** Weather blends (slice 8, weather.json mpc): wet 0..1 and snow cover 0..1. */
   wet: uniform(0),
   snow: uniform(0),
+  /** Brightness of the rain streaks and snow flakes (night 0.07-0.09). */
+  precipLight: uniform(1),
+  /** Snow colour (linear rgb) and the packed-snow road colour (rgb, a = road cover). */
+  snowColor: uniform(new THREE.Vector3(0.8, 0.87, 0.98)),
+  snowRoadColor: uniform(new THREE.Vector4(0.7, 0.72, 0.77, 0.9)),
+  /** Snow: normal z where the cover starts and is full, edge noise, foliage cover. */
+  snowParams: uniform(new THREE.Vector4(0.5, 0.78, 0.25, 0.85)),
+  /** Wet: road darkening, ground darkening, road roughness, ground roughness. */
+  wetParams: uniform(new THREE.Vector4(0.5, 0.78, 0.16, 0.55)),
   /** Rock occluder fade (canyon walls; 0 on stages without them). */
   rockFade: uniform(0),
   /** How much sun reaches inside tree canopies that the shadow map says are shadowed (0..1). */

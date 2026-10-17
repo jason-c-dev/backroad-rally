@@ -9,7 +9,7 @@ import { ChaseCamera } from './camera/chaseCamera';
 import { Controls } from './input/controls';
 import { FrameHud } from './hud/frameHud';
 import { StageHud, type HudInfo, type HudJson } from './hud/stageHud';
-import { loadHudSettings, saveHudSettings, type HudSettings } from './settings';
+import { loadHudSettings, loadRunSettings, saveHudSettings, saveRunSettings, type HudSettings } from './settings';
 import { posM } from './ue';
 import { createWorld, initPhysics } from './sim/physics';
 import { buildTestTrackPhysics } from './sim/testTrackPhysics';
@@ -37,6 +37,12 @@ import { BodyContacts } from './game/contacts';
 import { mainSurface } from './game/carEvents';
 import { StageFeatures } from './world/features';
 import { Rng } from './fx/config';
+// weather (slice 8)
+import { arcadeScale, icePatches, iceWeightAt, nextWeather, pickWeather, puddleSites, weatherDef, type RoadForWeather, type WeatherDef, type WeatherJson } from './game/weather';
+import { materialWeather } from './look/materials';
+import { Precipitation } from './fx/precip';
+import { RoadMarks } from './fx/roadMarks';
+import { deepMerge } from './sim/tuning';
 
 const params = new URLSearchParams(location.search);
 /** The stages in the original's order (?stage=<id>, N cycles them). */
@@ -81,6 +87,9 @@ interface Level {
   condition?(): string;
   /** The stage HUD (stages only). */
   hud?: StageHud;
+  /** Snow's ice patches (s ranges, m) and the road marks (stages only). */
+  ice?: [number, number][];
+  marks?: RoadMarks | null;
 }
 
 async function main() {
@@ -119,13 +128,21 @@ async function main() {
   const carId = params.get('car') ?? 'swift';
   const stageId = params.get('stage') ?? 'finland';
   const reverse = params.get('dir') === 'reverse';
-  const [camCfg, car, tuningJson, rapier, conditions] = await Promise.all([
+  const [camCfg, car, tuningJson, rapier, conditions, weatherJson] = await Promise.all([
     load<CameraData & { dof: DofJson }>('camera.json'),
     loadCar(carId),
     load<Record<string, unknown>>('cars_tuning.json'),
     initPhysics(),
     load<ConditionsJson>('conditions.json'),
+    load<WeatherJson>('weather.json'),
   ]);
+  // the weather (slice 8): ?weather=clear|rain|snow|stage, else the stored choice (key J), else clear
+  const runSettings = loadRunSettings();
+  const weatherName = pickWeather(weatherJson, params.get('weather'), stageId, reverse, runSettings.weather);
+  const weather = weatherDef(weatherJson, weatherName);
+  const clearWeather = weatherName === 'clear';
+  // the materials build the weather code only in rain or snow (before the stage and the car load)
+  materialWeather.kind = weatherName;
 
   const scene = new THREE.Scene();
   const world = createWorld(rapier);
@@ -144,7 +161,7 @@ async function main() {
       info: () => 'test bench',
     };
   } else {
-    level = await buildStageLevel(stageId, reverse, rapier, world, scene, () => vehicle, () => sim, hudRoot, hudSettings);
+    level = await buildStageLevel(stageId, reverse, rapier, world, scene, () => vehicle, () => sim, hudRoot, hudSettings, weather);
   }
 
   const model = await loadCarModel(car);
@@ -153,6 +170,22 @@ async function main() {
   vehicle = new Vehicle(rapier, world, tuning, level.surfaceAt, car.wheel_pos_cm);
   const arcade = createArcade(vehicle);
   vehicle.arcade = arcade;
+  // weather grip per surface, the arcade multipliers (handbrake yaw x1.8 in rain), snow's ice patches; clear
+  // weather leaves the car untouched
+  if (!clearWeather) {
+    const tracker = (level as { tracker?: RoadTracker }).tracker;
+    const patches = level.ice ?? [];
+    const edge = weather.ice?.edge_m ?? 3;
+    const ice = tracker && patches.length ? {
+      grip: weather.ice?.grip ?? 0.3,
+      // UE GetIceAt: the road projection near the car's, within the road (+1 m), soft patch ends
+      at: (p: THREE.Vector3) => {
+        const q = tracker.road.project(p, tracker.proj?.index ?? -1);
+        return Math.abs(q.lateral) > q.halfWidth + 1 ? 0 : iceWeightAt(patches, q.s, edge);
+      },
+    } : null;
+    vehicle.applyWeather(weather.grip, arcadeScale(weather), ice);
+  }
   sim = new Simulation(world, vehicle);
   sim.maxSteps = Math.ceil(8 * Math.max(1, timeScale));
   const spawn = () => {
@@ -189,6 +222,7 @@ async function main() {
       clearFstopScale: dof.by_weather?.clear?.fstop_scale ?? 1, sensorWidth: (dof.post?.DepthOfFieldSensorWidth ?? 36) / 1000,
       scale: Number(params.get('dofscale') ?? 1) || 1,
     },
+    weather: clearWeather ? null : weather,
   }, { root: model.root, headlightPosCm: (car as unknown as { headlight_pos_cm: number[][] }).headlight_pos_cm });
   look.setCondition(CONDITIONS[condIndex]);
   // the stage's vegetation detail and shadow casters follow the tier
@@ -211,7 +245,9 @@ async function main() {
   // effects (src/fx), spectators (src/world/crowd.ts), breakables (src/world/breakables.ts) and the car's game events (src/game/carEvents.ts).
   // They hook the level's per-step and per-frame calls and only read the car: the sim runs unchanged.
   // ?fx=0 draws no effects (events still fire), ?crowd=0 places no spectators.
-  const fxCfg = await load<FxJson>('fx.json');
+  // the weather's effects over fx.json (rain: less dust, darker chips; snow: white powder, white tyre tracks)
+  const fxBase = await load<FxJson>('fx.json');
+  const fxCfg = (clearWeather || !weather.fx ? fxBase : deepMerge(fxBase as unknown as Record<string, unknown>, weather.fx)) as unknown as FxJson;
   const fx = new Fx(scene, fxCfg, { ...(car as unknown as { exhaust_pos_cm?: number[][]; wheel_width_cm: number; length_cm: number }), id: carId },
     { enabled: params.get('fx') !== '0' });
   const carEvents = new CarEvents();
@@ -223,12 +259,19 @@ async function main() {
     (stageLevel.runtime as unknown as { breakable_radius_cm: Record<string, number> }).breakable_radius_cm ?? {}, rapier, world,
     fx.enabled ? (p) => fx.pools.chip.emit(p) : null) : null;
   if (breakables) scene.add(breakables.group);
+  // rain streaks or snow flakes around the camera, and the rain's splashes (src/fx/precip.ts)
+  const precip = weather.precip && (weather.precip.count ?? 0) > 0 && fx.enabled ? new Precipitation(weather.precip, world, rapier, vehicle.body) : null;
+  if (precip) scene.add(precip.mesh);
+  /** Share of the precipitation drawn per tier (perf budget, see docs/reference.md). */
+  const PRECIP_SCALE: Record<string, number> = { high: 1, medium: 1, low: 1 };
   const lookOnQuality = look.onQuality;
   look.onQuality = (q, name) => {
     lookOnQuality?.(q, name);
     fx.setQuality(name);
+    if (precip) precip.scale = PRECIP_SCALE[name] ?? 1;
   };
   fx.setQuality(look.qualityName);
+  if (precip) precip.scale = PRECIP_SCALE[look.qualityName] ?? 1;
   const levelStep = level.step?.bind(level);
   level.step = (dt, input) => {
     const out = levelStep ? levelStep(dt, input) : input;
@@ -239,11 +282,13 @@ async function main() {
   const features = (level as { features?: StageFeatures }).features ?? null;
   if (features) carEvents.waterAt = () => features.water;
   const sprayRng = new Rng(2024);
+  const precipFwd = new THREE.Vector3();
   const levelFrame = level.frame?.bind(level);
   level.frame = (dt, cameraPos) => {
     levelFrame?.(dt, cameraPos);
     features?.frame(dt, vehicle, (level as { tracker?: RoadTracker }).tracker?.proj ?? null, fx.enabled ? fx.pools.dust : null, sprayRng);
     fx.update(dt, vehicle, sim.renderPos, sim.renderRot, look);
+    precip?.update(dt, sim.renderPos, precipFwd.set(1, 0, 0).applyQuaternion(sim.renderRot), vehicle.velocity, cameraPos, fx.enabled ? fx.pools.puff : null);
     const run = (level as { run?: { phase: string; dnf: boolean } }).run;
     // a retired run coasts like a finish but gets no applause (the original's NotifyFinish skips a DNF)
     const crowdPhase = run?.dnf && run.phase === 'finished' ? 'retired' : run?.phase ?? 'running';
@@ -253,7 +298,7 @@ async function main() {
   };
   fx.warmup();
   crowd?.warmup();
-  (window as unknown as { __fx: object }).__fx = { fx, crowd, breakables, carEvents, events: fxEvents };
+  (window as unknown as { __fx: object }).__fx = { fx, crowd, breakables, carEvents, events: fxEvents, precip };
   // --- /fx ---
   // --- damage ---
   // src/game/damage.ts: the body's contact impulses (src/game/contacts.ts, read before every physics step) make
@@ -317,6 +362,15 @@ async function main() {
   };
   // stages until the stage select (slice 9): N next stage (shift+N previous), B the other direction.
   // A fresh page load, so the old stage's GPU buffers, colliders and sounds all go with it.
+  // weather until the stage select: J the next weather (clear, rain, snow), saved, and a fresh load like N and B
+  addEventListener('keydown', (e) => {
+    if (e.repeat || e.code !== 'KeyJ') return;
+    const next = nextWeather(weatherJson, weatherName);
+    saveRunSettings({ ...loadRunSettings(), weather: next });
+    const q = new URLSearchParams(location.search);
+    q.set('weather', next);
+    location.search = q.toString();
+  });
   addEventListener('keydown', (e) => {
     if (e.repeat || (e.code !== 'KeyN' && e.code !== 'KeyB')) return;
     const q = new URLSearchParams(location.search);
@@ -347,7 +401,8 @@ async function main() {
   onResize(); // the window may have changed while the stage loaded (going fullscreen, for one)
 
   // read-only handle for tools/check (headless runs)
-  (window as unknown as { __br: object }).__br = { vehicle, chase, model, sim, level, renderer, perf, backend, carId, look, gpu, auto, damage, contacts };
+  (window as unknown as { __br: object }).__br = { vehicle, chase, model, sim, level, renderer, perf, backend, carId, look, gpu, auto, damage, contacts,
+    weather: { name: weatherName, def: weather, ice: level.ice ?? [], marks: level.marks ?? null, precip } };
 
   // --- audio ---
   // sound (src/audio): engine, tyres, world, music. It reads the game every frame and never writes to it.
@@ -356,6 +411,7 @@ async function main() {
     vehicle, carId, stageId, reverse, camera: chase.camera, params,
     level: level as unknown as Parameters<typeof startAudio>[0]['level'],
     isNight: () => look.cond?.name === 'night',
+    weather: clearWeather ? null : weather.audio,
   })).catch((e) => console.error('audio:', e));
   // --- /audio ---
 
@@ -389,10 +445,10 @@ async function main() {
     hud.extra = `${car.name} · ${level.info()} · ${Math.abs(vehicle.forwardSpeedKmh).toFixed(0)} km/h · gear ${gear}` +
       ` · traction assist ${vehicle.tractionAssist ? 'on' : 'off'} · camera ${chase.presetName} · ${controls.device}` +
       ` · damage ${damage.enabled ? `${(damage.value * 100).toFixed(0)}%${damage.terminal ? ' (wrecked)' : ''}` : 'off'}` +
-      `\n${look.cond.name} · post ${look.post.enabled ? 'on' : 'off'} · quality ${look.qualityName}` +
+      `\n${look.cond.name} · ${weatherName} · post ${look.post.enabled ? 'on' : 'off'} · quality ${look.qualityName}` +
       `${look.scale < 1 ? ` ${Math.round(look.scale * 100)}%` : ''}${auto ? ' (auto)' : ''}` +
       `\nw s a d drive · space handbrake · r recover · t traction assist · c camera · l livery · enter restart · k time of day · p post` +
-      ` · u km/h or mph · i speed dial · f3 this panel · n next stage · b direction`;
+      ` · u km/h or mph · i speed dial · f3 this panel · n next stage · b direction · j weather`;
     const r0 = performance.now();
     look.render();
     const info = renderer.info.render as unknown as { drawCalls: number; triangles: number };
@@ -413,7 +469,7 @@ async function main() {
 }
 
 async function buildStageLevel(id: string, reverse: boolean, rapier: typeof RAPIER, world: RAPIER.World, scene: THREE.Scene,
-  getVehicle: () => Vehicle, getSim: () => Simulation, hudRoot: HTMLElement, hudSettings: HudSettings): Promise<Level> {
+  getVehicle: () => Vehicle, getSim: () => Simulation, hudRoot: HTMLElement, hudSettings: HudSettings, weather: WeatherDef): Promise<Level> {
   const [catalog, runtime, hudJson] = await Promise.all([
     load<Record<string, CatalogEntry>>('env_catalog.json'),
     load<StageRuntimeJson & { flow: FlowConfig }>('stage_runtime.json'),
@@ -430,6 +486,48 @@ async function buildStageLevel(id: string, reverse: boolean, rapier: typeof RAPI
   // fords, bridges, the canyon rock fade, the covered bridge's shadow (src/world/features.ts)
   const features = new StageFeatures(stage, runtime.features ?? {});
   const v = stage.json.variants[reverse ? 'reverse' : 'forward'];
+  // weather: snow hides the grass tufts and flower specks and freezes the fords; its ice patches and rain's
+  // puddles are placed by the original's rules and random stream (src/game/weather.ts)
+  for (const c of weather.hide_categories ?? []) stage.hidden.add(c);
+  features.frozen = !!weather.fords_frozen;
+  const rj = stage.json.road as typeof stage.json.road & { y_cm?: number[] };
+  const fords = stage.json.fords ?? [];
+  const roadW: RoadForWeather = {
+    s: stage.road.s,
+    y: rj.y_cm ? rj.y_cm.map((y) => y / 100) : stage.road.y,
+    surfaceAt: (s) => {
+      const S = stage.road.s;
+      let lo = 0, hi = S.length - 1;
+      if (s <= S[0]) lo = 0;
+      else if (s >= S[hi]) lo = hi;
+      else {
+        while (hi - lo > 1) {
+          const mid = (lo + hi) >> 1;
+          if (S[mid] <= s) lo = mid;
+          else hi = mid;
+        }
+      }
+      return rj.surfaces[rj.surface[lo]];
+    },
+    inFord: (s, m) => fords.some((f) => s >= f.s0 - m && s <= f.s1 + m),
+    onBridge: (s, m) => features.onBridge(s, m),
+  };
+  const fwd = stage.json.variants.forward;
+  const ice = weather.ice ? icePatches(weather.ice, id, fwd.start_s, fwd.finish_s, roadW) : [];
+  const decals = weather.road_decals;
+  let marks: RoadMarks | null = null;
+  if (ice.length || decals?.puddles || decals?.ruts) {
+    const down = { x: 0, y: -1, z: 0 };
+    marks = new RoadMarks(stage.road, (x, z, fromY) => {
+      const hit = world.castRay(new rapier.Ray({ x, y: fromY, z }, down), 6, true, undefined, undefined, undefined, undefined, (c) => stage.isTerrain(c));
+      return hit ? fromY - hit.timeOfImpact : null;
+    });
+    if (decals?.puddles) marks.puddles(puddleSites(decals.puddles, id, roadW, (s) => stage.road.sampleAt(s).halfWidth));
+    if (ice.length) marks.ice(ice, weather.ice?.decal_width_scale ?? 0.9);
+    if (decals?.ruts) marks.ruts(decals.ruts.segment_m ?? [3, 8], (decals.ruts.width_cm ?? 240) / 100, (s) => roadW.inFord(s, 6) || roadW.onBridge(s, 2));
+    marks.build();
+    scene.add(marks.mesh);
+  }
   const rules = {
     ...DEFAULT_RULES,
     corridor: runtime.corridor_cm / 100,
@@ -508,7 +606,8 @@ async function buildStageLevel(id: string, reverse: boolean, rapier: typeof RAPI
       const gear = veh.gear === 0 && veh.forwardSpeed > 1 ? veh.lastDriveGear : veh.gear;
       hud.update(run, {
         stageName: stage.json.name,
-        subtitle: [stage.json.location.toLowerCase(), `${lengthKm.toFixed(1)} km`, reverse ? 'reverse' : 'forward', cond].filter(Boolean).join(' · '),
+        subtitle: [stage.json.location.toLowerCase(), `${lengthKm.toFixed(1)} km`, reverse ? 'reverse' : 'forward', cond,
+          weather.name !== 'clear' ? weather.label : ''].filter(Boolean).join(' · '),
         kmh: Math.abs(veh.forwardSpeedKmh),
         gear,
         gears: veh.t.gearRatios.length,
@@ -519,7 +618,7 @@ async function buildStageLevel(id: string, reverse: boolean, rapier: typeof RAPI
     info: () => `${id} s=${tracker.proj?.s.toFixed(0) ?? '-'} · ${stage.stats.visible} inst${ap ? ' · autopilot' : ''}`,
     visible: () => stage.stats.visible,
   };
-  Object.assign(level, { tracker, stage, autopilot: ap, features });
+  Object.assign(level, { tracker, stage, autopilot: ap, features, ice, marks });
   return level;
 }
 
