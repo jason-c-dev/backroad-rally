@@ -128,6 +128,43 @@ the address. An address with
 `?stage=`, `?car=` or `?autopilot=` and no `?mode=` goes directly to the stage, as before
 the menus (for development and the check scripts).
 
+### Loading indicator
+
+All waits between screens show one loading indicator: the lowercase word "loading" and
+three dots that pulse, in Inter, in the soft ink of the menus (`src/menu/busy.ts`,
+`.busy` in `src/style.css`). It tells you what loads:
+
+| Where | Text | Position |
+|---|---|---|
+| The first load, before the game code starts | loading | On the curtain, to the right of where the menu panel comes |
+| The menus while the backdrop builds or changes (another location or weather) | loading, then preparing graphics | On the curtain, halfway between the right edge of the panel and the right edge of the screen |
+| The loading card of a stage | loading stage, then preparing graphics | In the card, where the card had "loading" |
+| Quit to the menu, or a career rally that is complete | loading | On the curtain |
+| The career's next stage | loading stage | In the loading card of the next stage, which comes down over the results |
+| The garage, while the model of another car downloads | loading car | Over the car, on a small light panel |
+
+"Preparing graphics" is the shader warm-up and the auto quality measurement (see
+[Auto quality](#auto-quality)). On a first visit it can take several seconds.
+
+These rules apply:
+
+- The indicator waits 0.25 s, then fades in. A short wait (a car from the cache, a
+  restart) shows nothing.
+- When a page goes to the next page, it keeps its curtain and card in `sessionStorage`
+  (`backroad-rally.boot`). `index.html` shows them again before the first paint of the
+  next page, with the indicator already on. Thus the screen does not go blank between
+  the pages, and the indicator does not wait again.
+- The animation changes only the opacity. The browser's compositor runs it, so the dots
+  keep their movement while the main thread builds shaders. The game sets the text
+  "preparing graphics" and lets the page draw one frame before the warm-up starts.
+- The indicator is in the curtain or in the card. It fades with them (0.6 s on a stage,
+  0.8 s in the menus). When they are gone it has `display: none`, so it costs nothing
+  during a run.
+- With `prefers-reduced-motion`, the dots do not move: the text is a static
+  "loading...".
+- `index.html` preloads the Inter font of the indicator. The font has `font-display:
+  block`, so without the preload the text was invisible until the font loaded.
+
 ## A stage run
 
 A run has these steps:
@@ -1083,6 +1120,16 @@ The check scripts use headless Chrome through playwright-core:
   the frame gaps over 50 ms after the curtain, and each "blank" frame (more than 60% of
   the pixels in the page background). `--rtx` starts Chrome on the NVIDIA GPU (see
   [Browsers](#browsers)).
+- `node tools/check/transitions.mjs [--career] [--net 20] [--shots] [--headed] [--webgpu]`
+  measures each wait between screens: the first load, a car change in the garage,
+  another location and another weather in the stage select, the start of a stage,
+  restart, quit to the menu and (`--career`) the career's next stage. For each wait it
+  prints the time from the key press until the scene shows, the time with the loading
+  indicator on screen, the time with a blank screen (only the curtain colour) and what
+  shows, phase by phase. `--net` sets a home connection (Mbit/s). `--shots` saves a
+  screenshot of each wait while the indicator shows. Note: the CDP screencast does not
+  show the movement of a compositor animation while the main thread is busy. To see the
+  real movement, capture the desktop (`grim` on Hyprland).
 - `node tools/check/load.mjs [--mbit 20] [--latency 20] [--stage wales] [--menu-wait 0] [--again]`
   measures a load on a home connection: a cold cache and a throttled network. It gives
   the time to the title, to the stage and to the countdown, the bytes and requests, the

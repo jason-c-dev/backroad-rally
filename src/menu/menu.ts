@@ -13,6 +13,7 @@ import { CAR_IDS, careerRules, garageCar, groupName, km, lockLine, locationOf, s
 import { flagSvg } from './flags';
 import { menuQuery, playQuery, putMusic, type MenuState, type PlayMode, type PlaySetup } from './nav';
 import { settingsScreen, type SettingsHost } from './settingsPanel';
+import { busy, handOff, setBusyText, takeBoot } from './busy';
 import { MenuController, Row, controlsHint, el, esc, label, onRefresh, panel, pt, setScale, spacer, table, u, type Screen } from './ui';
 
 export interface MenuDiorama {
@@ -44,6 +45,8 @@ export class Menu {
   private hintsEl: HTMLElement;
   private musicEl: HTMLElement;
   private loadingEl: HTMLElement;
+  /** The loading indicator on the curtain (src/menu/busy.ts). */
+  private busyEl: HTMLElement;
   screen = 'title';
   flow: PlayMode | 'career' = 'quick';
   carIndex = 0;
@@ -70,6 +73,7 @@ export class Menu {
     readonly params: URLSearchParams, state: MenuState | null) {
     this.root = el('div', 'menu-root', document.body);
     this.curtainEl = el('div', 'curtain', this.root);
+    this.busyEl = busy(this.curtainEl, 'loading', takeBoot());
     const content = el('div', 'content', this.root);
     this.hintsEl = el('div', 'hints', this.root);
     this.musicEl = el('div', 'music', this.root);
@@ -413,7 +417,10 @@ export class Menu {
     this.showLoading(setup);
     this.ctl.active = false;
     putMusic(null);
-    setTimeout(() => location.assign(`${location.pathname}${playQuery(setup, this.params)}`), 200);
+    setTimeout(() => {
+      this.handOff();
+      location.assign(`${location.pathname}${playQuery(setup, this.params)}`);
+    }, 200);
   }
 
   /** The cars the garage offers: the season's in the career, else all. */
@@ -647,11 +654,26 @@ export class Menu {
     this.ctl.active = false;
     putMusic(null);
     // let the card draw before the page goes
-    setTimeout(() => location.assign(`${location.pathname}${playQuery(setup, this.params)}`), 200);
+    setTimeout(() => {
+      this.handOff();
+      location.assign(`${location.pathname}${playQuery(setup, this.params)}`);
+    }, 200);
+  }
+
+  /** What the curtain's indicator says ("loading", "preparing graphics"). */
+  setBusy(text: string): void {
+    setBusyText(this.busyEl, text);
+  }
+
+  /** The page goes: the next one starts with this curtain and card on screen (src/menu/busy.ts). */
+  handOff(): void {
+    handOff(this.root);
   }
 
   showLoading(setup: PlaySetup): void {
     this.loadingEl.replaceChildren(loadingCard(this.data, setup, setup.mode === 'career' && this.career ? careerLine(this.rules, this.career) : undefined));
+    // a stage page loads next: a wait of seconds, so the indicator shows at once
+    this.loadingEl.querySelector('.busy')?.classList.add('now');
     this.loadingEl.style.display = '';
     this.hintsEl.style.display = this.musicEl.style.display = 'none';
   }
@@ -685,6 +707,14 @@ export class Menu {
     const a = this.diorama.curtain;
     this.curtainEl.style.opacity = a.toFixed(3);
     this.curtainEl.style.display = a > 0.001 ? '' : 'none';
+    // shown at once after a hand-off; a later curtain (another backdrop) waits the usual moment
+    if (a === 0 && this.busyEl.classList.contains('now')) this.busyEl.classList.remove('now');
+    // the indicator halfway between the panel's right edge and the screen's
+    const r = a > 0.001 ? this.ctl.screen?.el.getBoundingClientRect() : null;
+    if (r?.width) {
+      const x = `${Math.round(Math.min((r.right + innerWidth) / 2, innerWidth - this.busyEl.offsetWidth / 2 - 16))}px`;
+      if (this.busyEl.style.left !== x) this.busyEl.style.left = x;
+    }
     this.ctl.frame();
     const t = this.music?.title() ?? '';
     const m = t ? `now playing  ·  ${t.toLowerCase()}` : '';
@@ -698,7 +728,7 @@ export function careerLine(R: CareerRules, c: CareerState): string {
   return `career  ·  ${season?.name ?? ''}  ·  ${rally?.name ?? ''}  ·  stage ${c.stage + 1} of ${rally?.stages.length ?? 2}  ·  ${R.carName(c.car)}`;
 }
 
-/** The loading card (UE LoadingCard): stage name, the line, mode and car, "loading", the controls. */
+/** The loading card (UE LoadingCard): stage name, the line, mode and car, the loading indicator, the controls. */
 export function loadingCard(data: MenuData, s: PlaySetup, modeLine?: string): HTMLElement {
   const meta = stageMeta(data, s.stage);
   const cond = s.cond === 'stage' || !CONDITIONS.includes(s.cond) ? stageCondition(data, s.stage, s.reverse) : s.cond;
@@ -713,7 +743,7 @@ export function loadingCard(data: MenuData, s: PlaySetup, modeLine?: string): HT
   line(meta?.name ?? s.stage, 64, 300, false, 0);
   line([meta?.location ?? s.stage, `${km(meta, s.reverse).toFixed(1)} km`, s.reverse ? 'reverse' : 'forward', cond, weather].join('  ·  '), 22, 400, false, 10);
   line(modeLine ?? `${s.mode === 'attack' ? 'time attack' : 'quick stage'}  ·  ${car?.name ?? s.car}`, 17, 400, true, 28);
-  line('loading', 16, 500, true, 44);
+  busy(box, 'loading stage').style.paddingTop = u(44);
   const c = controlsHint(box, data.menu.controls, 15, true);
   c.style.paddingTop = u(40);
   return box;

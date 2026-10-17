@@ -6,9 +6,36 @@
     <title>backroad rally</title>
     <link rel="icon" href="data:," />
     <meta name="description" content="a small top-down rally game with a diorama look" />
+    <!-- the loading indicator's font, fetched with the page: Inter shows nothing until it has loaded (font-display: block) -->
+    <link rel="preload" href="/fonts/Inter-Medium.woff2" as="font" type="font/woff2" crossorigin />
   </head>
   <body>
     <div id="app"></div>
+    <script>
+      // the boot screen, before the game's code has loaded (src/menu/busy.ts): the curtain and card the last page of
+      // the game handed over, or the curtain with the loading indicator; the page's own menus replace it
+      (function () {
+        var s = null;
+        try {
+          s = JSON.parse(sessionStorage.getItem('backroad-rally.boot') || 'null');
+          sessionStorage.removeItem('backroad-rally.boot');
+        } catch (e) {}
+        var b = document.createElement('div');
+        b.id = 'boot';
+        if (s && s.html) {
+          b.className = s.cls + ' handoff';
+          b.setAttribute('style', s.style);
+          b.innerHTML = s.html;
+        } else {
+          var d = Math.min(innerWidth, innerHeight) / 1080;
+          b.className = 'menu-root';
+          b.setAttribute('style', '--d: ' + d + 'px; --f: ' + (d * 4) / 3 + 'px');
+          b.innerHTML = '<div class="curtain"><div class="busy" role="status"><span class="t">loading</span>'
+            + '<span class="dots" aria-hidden="true"><i>.</i><i>.</i><i>.</i></span></div></div>';
+        }
+        document.body.appendChild(b);
+      })();
+    </script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

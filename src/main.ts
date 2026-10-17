@@ -51,6 +51,7 @@ import { FrameLimiter, buildRoadMarks, createRenderer, dofOptions, gpuName, look
 import { pageKind, parsePlay, putMenuState, type PlaySetup } from './menu/nav';
 import { careerRules, loadMenuData, stageMeta } from './menu/data';
 import { careerLine, loadingCard, menuHref } from './menu/menu';
+import { nextPaint } from './menu/busy';
 import { playQuery } from './menu/nav';
 import { StageMenus, type ResultsInfo } from './menu/stageMenus';
 import type { SettingsHost } from './menu/settingsPanel';
@@ -196,7 +197,8 @@ async function runStage(play: PlaySetup | null) {
       screen, flow: play?.mode ?? 'quick', car: carId, livery: play?.livery ?? 0, stage: stageId, reverse,
       cond: play?.cond ?? 'stage', weather: play?.weather ?? 'stage',
     });
-    location.assign(menuHref(params));
+    menus.leave();
+    void nextPaint().then(() => location.assign(menuHref(params)));
   };
   const careerHooks = { continue: () => {} };
   const menus = new StageMenus({
@@ -226,6 +228,7 @@ async function runStage(play: PlaySetup | null) {
     }, career && rules ? careerLine(rules, career) : undefined));
     if (!play) (menus.root.querySelector('.loading .card > :nth-child(3)') as HTMLElement | null)?.replaceChildren('development');
   }
+  menus.setBusy('loading stage');
 
   // quality: ?quality=<tier> pins it for a visit, else the setting (auto = adaptive, autoQuality.ts)
   const qParam = params.get('quality');
@@ -566,6 +569,9 @@ async function runStage(play: PlaySetup | null) {
   bestGhost?.beginRun();
   rivals?.beginRun();
   // --- /ghosts ---
+  // the shaders build next, a second or more with the main thread busy: the indicator says so first
+  menus.setBusy('preparing graphics');
+  await nextPaint();
   // place the camera, then build every pipeline now rather than mid-run (the loading curtain covers this)
   chase.update(0, { position: sim.renderPos, forward: new THREE.Vector3(1, 0, 0).applyQuaternion(sim.renderRot), velocity: vehicle.velocity });
   look.update(0, sim.renderPos, innerWidth, innerHeight);
@@ -698,15 +704,19 @@ async function runStage(play: PlaySetup | null) {
       sv.career = career as unknown as Record<string, unknown>;
       writeSave(sv);
       putMenuState({ screen: pending[0] ?? 'career', flow: 'career', pending });
-      location.assign(menuHref(params));
+      menus.leave();
+      void nextPaint().then(() => location.assign(menuHref(params)));
       return;
     }
     const def = rules.startStage(career);
     sv.career = career as unknown as Record<string, unknown>;
     writeSave(sv);
     if (!def) return quitTo('career');
-    location.assign(`${location.pathname}${playQuery({ mode: 'career', stage: def.stage, reverse: isRev(def.variant), car: career.car, livery: career.livery,
-      cond: def.condition, weather: rules.stageWeather(def) }, params)}`);
+    const next: PlaySetup = { mode: 'career', stage: def.stage, reverse: isRev(def.variant), car: career.car, livery: career.livery,
+      cond: def.condition, weather: rules.stageWeather(def) };
+    // the next stage's loading card comes down over this one and stays through the page load
+    menus.leave(menuData ? loadingCard(menuData, next, careerLine(rules, career)) : undefined);
+    void nextPaint().then(() => location.assign(`${location.pathname}${playQuery(next, params)}`));
   };
 
   // read-only handle for tools/check (headless runs)
