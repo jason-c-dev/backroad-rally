@@ -153,6 +153,10 @@ tiers, effects, damage, HUD, audio, tests, asset conversion and browser checks.
   connection with its makers and received no sponsorship from them. I bought the game
   myself, and I am a huge fan of Funselektor's work. You can buy art of rally for PC and
   consoles from [its website](https://artofrally.com/).
+- art of rally was inspiration only. Nothing was taken from it: no files, code, assets,
+  sounds or music, and no binaries were reverse-engineered. The goal was to test Claude
+  Code in a full game pipeline, with a game in this style, without using anything from
+  the original game. Every model, texture, sound, track and line of code here is new.
 - Rendering: [three.js](https://threejs.org/) (MIT).
 - Physics: [Rapier](https://rapier.rs/) (Apache-2.0).
 - Sound effects and music generated with [ElevenLabs](https://elevenlabs.io/).
