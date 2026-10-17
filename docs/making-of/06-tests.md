@@ -113,9 +113,33 @@ The agents learned some rules for these measurements:
   that the car stops, does not fly up and can reverse away.
 - Vitest unit tests cover the unit conversion, the road projection, the stage flow,
   damage, effects, the level-of-detail builder, the audio mix and more. There were 83
-  unit tests after the damage slice.
+  unit tests after the damage slice, and 168 after the polish slice. The new tests
+  cover the weather, the saves, the menus, the career rules, the rival simulation and
+  the ghost format. Each rival line from the original decodes and encodes again to the
+  same bytes.
 
-## 6. A human drive
+## 6. Flow, load and browser checks
+
+The last slices added checks for the full game:
+
+- `tools/check/flow.mjs` walks the menus from the title to a stage, pause, settings and
+  results, with the keyboard or a gamepad.
+- `tools/check/career.mjs` plays a full career season with the autopilot, at four times
+  real speed, and checks the standings, the unlocks and the save.
+- `tools/check/ghosts.mjs` drives a time attack twice and checks the best ghost and
+  the rival ghosts.
+- `tools/check/playthrough.mjs` tests the countdown, recover, restart, pause and a
+  retirement from damage.
+- `tools/check/flash.mjs` records what the screen really shows in a visible Chrome. It
+  finds blank frames, gaps over 50 ms and shaders that compile after the loading curtain.
+- `tools/check/load.mjs` measures the download and the time to the title and to the
+  countdown, on a 20 Mbit/s connection with an empty cache.
+- `tools/check/cachebust.mjs` builds the site twice with one changed data file, and
+  checks that only the URL of that file changes.
+- `tools/check/browsers.mjs` runs the same flow in Chrome and Firefox, with WebGPU and
+  WebGL2, on the integrated and the discrete GPU.
+
+## 7. A human drive
 
 Robots do not drive like people. In the Unreal game, a power-slide change passed 119
 feel tests and a 300-run autopilot comparison. Then the developer found it "practically

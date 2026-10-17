@@ -76,7 +76,8 @@ This list gives the known differences on 17 October 2026.
 - A change of quality tier still compiles the shaders again (0.7 to 1.4 s). Thus the
   game changes the tier only behind the loading curtain, or when you change the setting.
 - Chrome on Linux has no WebGPU by default, so it uses WebGL2. With WebGPU switched on,
-  Chrome on an integrated GPU can fall back to a software renderer (about 2 fps).
+  Chrome on an integrated GPU can fall back to a software renderer (about 2 fps). The
+  game finds this and uses WebGL2 on the GPU.
 - Firefox on Linux has no WebGPU yet, so it uses WebGL2.
 - Safari before version 18.4 cannot play Ogg Opus, so it has no music. Safari was not
   tested.

@@ -8,8 +8,8 @@
 |---|---|---|
 | Brainstorm and project creation | 10 Oct 2026 | 11 Oct 2026 |
 | Unreal Engine game | 11 Oct 2026 | 14 Oct 2026 (the session stayed open until 16 Oct) |
-| Web port, until this text | 14 Oct 2026 | 16 Oct 2026 |
-| The whole project, until this text | | about 6.1 days |
+| Web port | 14 Oct 2026 | 17 Oct 2026 |
+| The whole project | | about 6.8 days |
 
 ## Model and plan
 
@@ -20,19 +20,18 @@
 ## Tokens
 
 The numbers come from the Claude Code session logs, with each message counted once.
-The web port numbers are a snapshot from 16 October 2026, 20:44 UTC. The work
-continues.
+The web port numbers are from 17 October 2026, 14:19 UTC, after the last slice.
 
 | Part | Sessions | Agent transcripts | Messages | Input | Output | Cache write (5 min / 1 h) | Cache read |
 |---|---|---|---|---|---|---|---|
 | Brainstorm | 1 | 9 | 268 | 542 | 105,779 | 1,086,277 / 184,357 | 25,166,782 |
 | Unreal Engine game | 1 | 37 | 5,078 | 10,232 | 1,350,202 | 32,831,287 / 2,315,229 | 1,263,152,889 |
-| Web port | 2 | 11 | 1,784 | 3,590 | 717,234 | 7,800,963 / 1,622,051 | 439,699,825 |
-| **Total** | **4** | **57** | **7,130** | **14,364** | **2,173,215** | **41,718,527 / 4,121,637** | **1,728,019,496** |
+| Web port | 2 | 16 | 2,949 | 5,944 | 1,029,618 | 19,394,238 / 2,319,521 | 784,004,984 |
+| **Total** | **4** | **62** | **8,295** | **16,718** | **2,485,599** | **53,311,802 / 4,819,107** | **2,072,324,655** |
 
-In total, that is about 1.78 billion tokens, and 97.3% of them are cache reads. Each
+In total, that is about 2.13 billion tokens, and 97.2% of them are cache reads. Each
 agent reads its own long context again on each turn, and the cache makes that cheap.
-Output, the text and code that the model wrote, is about 2.2 million tokens.
+Output, the text and code that the model wrote, is about 2.5 million tokens.
 
 "Messages" are model responses. "Agent transcripts" are the background agents and
 their helpers.
@@ -42,7 +41,7 @@ their helpers.
 | Cost | Amount | How |
 |---|---|---|
 | **Actual cost** | **$200** | One month of the Max 20x plan. The whole project fits in one billing month, and the same plan also paid for other work in that month. |
-| API-equivalent cost (for comparison only) | $630.69 | The same tokens at the published API prices for Claude Opus 5.5 |
+| API-equivalent cost (for comparison only) | $769.35 | The same tokens at the published API prices for Claude Opus 5.5 |
 
 The API-equivalent cost by part:
 
@@ -50,11 +49,11 @@ The API-equivalent cost by part:
 |---|---|
 | Brainstorm | $14.06 |
 | Unreal Engine game | $462.35 |
-| Web port (snapshot) | $154.28 |
-| **Total** | **$630.69** |
+| Web port | $292.94 |
+| **Total** | **$769.35** |
 
-The API-equivalent cost by type of token: input $0.06, output $43.46, 5-minute cache
-writes $208.59, 1-hour cache writes $32.97 and cache reads $345.60.
+The API-equivalent cost by type of token: input $0.07, output $49.71, 5-minute cache
+writes $266.56, 1-hour cache writes $38.55 and cache reads $414.46.
 
 ## ElevenLabs
 
@@ -74,10 +73,10 @@ has no cost for the music and no cost in money.
 
 | Item | Unreal Engine game | Web version |
 |---|---|---|
-| Game code | about 27,600 lines of C++ | about 10,200 lines of TypeScript |
-| Tools and scripts | about 13,500 lines of Blender Python, plus about 100 editor Python and shell scripts | about 4,500 lines of converters, checks and tests |
-| Commits | 95 | 30 on `main`, from 14 pull requests (16 Oct) |
-| Agent briefs | 33 | 9 (16 Oct) |
+| Game code | about 27,600 lines of C++ | about 17,500 lines of TypeScript |
+| Tools and scripts | about 13,500 lines of Blender Python, plus about 100 editor Python and shell scripts | about 6,800 lines of converters, checks and tests |
+| Commits | 95 | 47 on `main`, from 22 pull requests |
+| Agent briefs | 33 | 13 |
 
 ## How to count it yourself
 

@@ -71,11 +71,18 @@ slice ended with a build, a check and a pull request.
 | Handling 2 | #11 | 16 Oct | Slides lose speed as in the original; rocks are solid |
 | Audio fixes | #12, #13 | 16 Oct | The listener on the car; louder crowds |
 | Damage and HUD | #14 | 16 Oct | Damage from physics impulses; the full in-stage HUD |
+| Documentation | #15 | 17 Oct | The making-of, the technical reference and a shorter README |
+| 7. All stages | #16 | 17 Oct | Six stages, both directions, all five cars |
+| Skid marks | #17, #18 | 17 Oct | Darker skid marks on gravel and dirt, after a playtest |
+| 8. Weather | #19 | 17 Oct | Rain and snow: grip, look, particles and sound |
+| 9. Game flow | #20 | 17 Oct | Menus, garage, stage select, pause, results, settings and saves |
+| 10. Career and ghosts | #21 | 17 Oct | Four seasons against nine rivals, the best-run ghost and the rival ghosts |
+| 11. Polish | #22 | 17 Oct | No white flash, cache busting, smaller downloads, look fixes, browser checks |
 
 The dates are in UTC. The [hard problems chapter](07-hard-problems.md) tells what went
 wrong in these slices.
 
-## The result so far
+## The result
 
 The comparisons below show the same stage, at the same spot and with the same camera.
 The left half is the Unreal game. The right half is the web game.
@@ -86,12 +93,8 @@ The left half is the Unreal game. The right half is the web game.
 
 ![Night at the big crest: Unreal Engine 5 on the left, three.js on the right](../images/compare-night-crest.jpg)
 
-## What comes next
+## The plan is complete
 
-The plan has these slices after the current work:
-
-1. All six stages, in both directions, with all five cars (in progress).
-2. Weather: rain and snow, with grip, looks, particles and sound.
-3. Game flow: menus, garage, stage select, pause, results, settings and saves.
-4. Career, the ghost of your best run, and rival ghosts.
-5. Performance and polish, and checks in more browsers.
+All eleven slices of the plan are in the published game. The
+[differences chapter](08-differences-and-lessons.md) tells what slices 8 to 11 added, and
+what is still not the same as the Unreal game.

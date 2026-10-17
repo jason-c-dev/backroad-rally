@@ -10,7 +10,7 @@ had two parts:
 1. **An Unreal Engine 5 game** for the desktop, in C++ and Python, with assets from
    Blender scripts. It took about four days, from 11 to 14 October 2026.
 2. **A web version** of the same game, in TypeScript with three.js and Rapier. It
-   started on 14 October 2026, and the work continues.
+   took about three days, from 14 to 17 October 2026, in eleven slices.
 
 Claude Code used one model, **Claude Opus 5.5**, for all the work, on a **Max 20x**
 plan. The [numbers chapter](09-by-the-numbers.md) gives the tokens and the cost.
@@ -28,7 +28,7 @@ plan. The [numbers chapter](09-by-the-numbers.md) gives the tokens and the cost.
 | 5 | [How Claude Code did the work](05-how-claude-code-worked.md) | The orchestrator, the briefs, the agents and the human decisions |
 | 6 | [Tests](06-tests.md) | The handling harness, the autopilot, screenshots and frame times |
 | 7 | [Hard problems](07-hard-problems.md) | Ten problems, their causes and the fixes, with numbers |
-| 8 | [Differences and lessons](08-differences-and-lessons.md) | What is not the same as the Unreal game yet, and what we learned |
+| 8 | [Differences and lessons](08-differences-and-lessons.md) | What slices 8 to 11 added, what is not the same as the Unreal game, and what we learned |
 | 9 | [By the numbers](09-by-the-numbers.md) | Tokens, cost, sessions and agents, and how to count them |
 
 ## The short version
@@ -44,6 +44,8 @@ plan. The [numbers chapter](09-by-the-numbers.md) gives the tokens and the cost.
   reference, and the agents converted its data, meshes and sound.
 - Automatic tests compare the web game with the Unreal game. There are 221 handling
   checks, an autopilot that drives the full stage, and screenshots from the same camera.
+- The last four slices (weather, menus, career and ghosts, polish) ran overnight. The
+  orchestrator checked and merged each one, and the developer tested the result.
 
 ## About this text
 
