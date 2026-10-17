@@ -65,4 +65,5 @@ from the developer are in his own words.
 > [!NOTE]
 > backroad rally is a free, non-commercial project with original assets. It is
 > inspired by art of rally. art of rally is a game by Funselektor Labs. This project
-> has no connection with its makers.
+> has no connection with its makers and got no sponsorship from them. The developer
+> bought the game and is a big fan of Funselektor's work.

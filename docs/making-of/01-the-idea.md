@@ -23,6 +23,10 @@ The developer chose a rally game. His model was
 he asked for a game "as close to the original as possible". It must have at least two
 tracks, the different car types and a playable run-through.
 
+The developer is a big fan of art of rally and of the work of its makers, Funselektor
+Labs. The developer bought the game. This project has no connection with Funselektor,
+and it got no sponsorship from them.
+
 backroad rally is inspired by art of rally. It copies no names, logos, music or assets.
 The rules for the design were these:
 
