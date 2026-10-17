@@ -288,6 +288,11 @@ export class Stage {
     this.surfaceAt = (collider) => this.colliderSurface.get(collider.handle) ?? 'grass';
   }
 
+  /** A terrain tile's collider (not an instance, a gantry or the car): weather marks drape on these only. */
+  isTerrain(collider: RAPIER.Collider): boolean {
+    return this.colliderSurface.has(collider.handle);
+  }
+
   // ---------------------------------------------------------------- instances
   private collectEnv(scene: THREE.Group): void {
     scene.updateMatrixWorld(true);

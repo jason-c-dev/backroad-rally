@@ -30,6 +30,8 @@ export interface StageAudioOpts {
   animals?: { x: number; y: number; z: number }[];
   phase(): string;
   isNight(): boolean;
+  /** The weather's bed (rain, snow wind): it replaces the day and the night ambience (weather.json audio). */
+  weatherAmbience?: { sound: string; volume: number } | null;
 }
 
 const REACTION_KEY: Record<CrowdReactionKind, string> = { cheer: 'cheer', nearMiss: 'near_miss', gasp: 'gasp', groan: 'groan', applause: 'applause' };
@@ -52,12 +54,13 @@ export class StageAudio {
   private familyCache = new Map<string, string>();
   private oneShotTimer = 0;
 
-  static sounds(sys: AudioSystem, o: Pick<StageAudioOpts, 'stageId'>): string[] {
+  static sounds(sys: AudioSystem, o: Pick<StageAudioOpts, 'stageId' | 'weatherAmbience'>): string[] {
     const m = sys.mix;
     const st = m.stage;
     const reactions = Object.values(st.crowd_reactions).flatMap((r) => r.sounds.flatMap((p) => sys.family(p)));
     return [
-      st.ambience[o.stageId] ?? st.ambience.default, st.ambience.night, 'A_Crowd_Loop', st.bridge.sound,
+      ...(o.weatherAmbience ? [o.weatherAmbience.sound] : [st.ambience[o.stageId] ?? st.ambience.default, st.ambience.night]),
+      'A_Crowd_Loop', st.bridge.sound,
       'A_Countdown_Beep', 'A_Countdown_Go', 'A_Finish_Chime', 'A_Reset_Whoosh',
       ...reactions, ...sys.family('A_Impact_Hard'), ...sys.family('A_Impact_Soft'), ...sys.family('A_Land'),
       ...sys.family('A_Water_Splash'),
@@ -150,15 +153,16 @@ export class StageAudio {
     this.lastPos.copy(p);
     this.hasLast = true;
 
-    // ambience: the stage's bed, or the night bed
+    // ambience: the stage's bed, or the night bed; the weather's bed replaces both
     const night = this.o.isNight();
-    const want = night ? st.ambience.night : st.ambience[this.o.stageId] ?? st.ambience.default;
+    const wa = this.o.weatherAmbience;
+    const want = wa ? wa.sound : night ? st.ambience.night : st.ambience[this.o.stageId] ?? st.ambience.default;
     if (want !== this.ambienceName) {
       if (this.ambience) this.oldAmbience.push(this.ambience);
       this.ambienceName = want;
       this.ambience = sys.loop(want, 'ambience');
     }
-    this.ambience?.set(st.ambience_volume ?? 1, 1, dt, 0.5);
+    this.ambience?.set((st.ambience_volume ?? 1) * (wa?.volume ?? 1), 1, dt, 0.5);
     this.oldAmbience = this.oldAmbience.filter((l) => {
       l.set(0, 1, dt, 0.5); // a 1.5 s fade-out
       if (!l.playing) l.dispose();

@@ -11,7 +11,7 @@
     "test": "vitest run",
     "convert:data": "node tools/convert/data.mjs",
     "convert:cars": "blender -b -P tools/blender/export_car_glb.py -- --car swift",
-    "test:handling": "tsx tools/test/handling.ts"
+    "test:handling": "tsx tools/test/handling.ts --weather all"
   },
   "devDependencies": {
     "@gltf-transform/core": "^4.5.1",

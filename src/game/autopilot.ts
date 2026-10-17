@@ -5,10 +5,13 @@
 // - look-ahead clamp(v * 0.8 s, 9, 32 m); steer = heading error / 18 deg;
 // - target speed = kmh * clamp(1 - turn / 110 deg, minTurn, 1), where turn is the largest heading
 //   change of the road 10..60 m ahead;
+// - in rain and snow it drives at sqrt(weather grip) of those speeds (the grip of the surface under most
+//   wheels) and looks up to 60 m / grip ahead for turns (UE core-7); clear weather is unchanged;
 // - eases the throttle once a power slide builds (UE core-13);
 // - keys 1 / 2: drives like a keyboard player (1 taps toward the steer it wants, 2 holds the key).
 import type { Road, RoadTracker } from '../sim/road';
 import type { DriverInput, Vehicle } from '../sim/vehicle';
+import type { Surface } from '../sim/tuning';
 
 export interface AutopilotOptions {
   kmh: number;
@@ -25,6 +28,22 @@ export const DEFAULT_AUTOPILOT: AutopilotOptions = { kmh: 120, minTurn: 0.3, key
 const POWER_THROTTLE = 0.35;
 const POWER_LIFT_FROM = 0.05;
 const norm180 = (d: number) => ((((d + 180) % 360) + 360) % 360) - 180;
+
+/** UE ARallyCar::GetMainSurface: the surface under most wheels (the first to reach the count wins a tie); 'none' in the air. */
+export function mainSurfaceUe(v: Pick<Vehicle, 'wheels'>): Surface {
+  const counts = new Map<Surface, number>();
+  let best: Surface = 'none', bestCount = 0;
+  for (const w of v.wheels) {
+    if (!w.inContact) continue;
+    const c = (counts.get(w.surface) ?? 0) + 1;
+    counts.set(w.surface, c);
+    if (c > bestCount) {
+      bestCount = c;
+      best = w.surface;
+    }
+  }
+  return best;
+}
 
 export class Autopilot {
   maxSlip = 0;
@@ -54,10 +73,13 @@ export class Autopilot {
     const target = this.road.pose(s + sign * look, sign).position;
     const yawNow = this.road.pose(s, sign).yawDeg;
     let turn = 0;
-    for (let ahead = 10; ahead <= 60.1; ahead += 10) {
+    const main = mainSurfaceUe(v);
+    const grip = Math.min(Math.max(v.weatherGrip[main === 'none' ? 'tarmac' : main] ?? 1, 0.2), 1);
+    const aheadMax = 60 / grip;
+    for (let ahead = 10; ahead <= aheadMax + 0.1; ahead += 10) {
       turn = Math.max(turn, Math.abs(norm180(this.road.pose(s + sign * ahead, sign).yawDeg - yawNow)));
     }
-    const vmax = this.opts.kmh * Math.min(Math.max(1 - turn / 110, this.opts.minTurn), 1);
+    const vmax = this.opts.kmh * Math.sqrt(grip) * Math.min(Math.max(1 - turn / 110, this.opts.minTurn), 1);
     const desired = (Math.atan2(target.z - v.position.z, target.x - v.position.x) * 180) / Math.PI;
     const err = norm180(desired - v.yawDeg);
     let steer = Math.min(Math.max(err / 18, -1), 1);

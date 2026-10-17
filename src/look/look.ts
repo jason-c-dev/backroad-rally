@@ -9,6 +9,7 @@ import { Post, postU, type DofConfig } from './post';
 import { QUALITY, type Quality } from './quality';
 import { U, TINTED } from './uniforms';
 import { interpTo } from '../camera/chaseCamera';
+import type { WeatherDef } from '../game/weather';
 
 /** Manual exposure is 2^bias × this: calibrated on the original's afternoon screenshots (road, dirt, grass). */
 const EXPOSURE_SCALE = 0.92;
@@ -26,6 +27,30 @@ const CONDITION_CALIB: Record<string, { exposure: number; sky: number }> = {
   night: { exposure: 0.85, sky: 1 },
   fog: { exposure: 1.15, sky: 1 },
 };
+/**
+ * Per-weather factors on top of the condition's (slice 8), fitted the same way against the original's rain
+ * and snow screenshots of the same spots (rain: finland, vermont, japan by day, finland and wales at night;
+ * snow: finland, arizona, wales by day, alps and vermont in the morning, finland and alps at sunset and at
+ * night): exposure, sky-light intensity, how far the sky light's colour goes toward grey (1 = grey), and a
+ * colour tint on the picture. Its captured sky lit overcast rain brighter, and lit snow's shadows less and
+ * less blue, than a hemisphere light scaled by the file's numbers; its tone curve also took the blue out of
+ * near-white snow. `default` serves the conditions without their own entry.
+ */
+type WeatherCalib = { exposure: number; sky: number; skyGrey: number; tint?: [number, number, number] };
+const WEATHER_CALIB: Record<string, Record<string, WeatherCalib>> = {
+  rain: {
+    default: { exposure: 1.45, sky: 0.85, skyGrey: 0, tint: [0.97, 1, 1.05] },
+    night: { exposure: 0.85, sky: 1, skyGrey: 0, tint: [1.08, 0.98, 0.92] },
+  },
+  snow: {
+    default: { exposure: 0.85, sky: 0.25, skyGrey: 1, tint: [1.07, 0.985, 0.93] },
+    morning: { exposure: 0.7, sky: 0.25, skyGrey: 0.7, tint: [1.1, 0.98, 0.88] },
+    sunset: { exposure: 1, sky: 1.5, skyGrey: 0, tint: [1.05, 0.98, 1.04] },
+    night: { exposure: 0.7, sky: 0.5, skyGrey: 0 },
+  },
+};
+/** Dev: ?wcal=exposure,sky,grey overrides the weather calibration (fitting it against screenshots). */
+const WCAL = typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('wcal')?.split(',').map(Number) ?? null;
 /** Shadow cascades: split depths (m from the camera) for the high chase camera, which sees ground from ~28 m. */
 const CASCADES = [52, 85, 160];
 
@@ -47,6 +72,8 @@ export interface LookOptions {
    * ?shadowmap=, ?shadowfar=). */
   override?: Partial<Quality>;
   dof: Omit<DofConfig, 'clear' | 'scale'> & { scale?: number };
+  /** The weather on top of the condition (weather.json; null or clear = the plain condition). */
+  weather?: WeatherDef | null;
 }
 
 export class Look {
@@ -117,7 +144,7 @@ export class Look {
       old.dispose();
     }
     const sun = (this.sun = new THREE.DirectionalLight());
-    const night = !!resolveCondition(this.json, this.cond?.name ?? this.opts.condition, this.opts.stage).headlights;
+    const night = !!resolveCondition(this.json, this.cond?.name ?? this.opts.condition, this.opts.stage, this.opts.weather).headlights;
     const cascades = night && this.opts.override?.cascades === undefined ? Math.min(q.cascades, q.nightCascades) : q.cascades;
     sun.castShadow = cascades > 0;
     // no sun shadows: no vegetation shadow casters either
@@ -165,22 +192,39 @@ export class Look {
   }
 
   setCondition(name: string): void {
-    const c = (this.cond = resolveCondition(this.json, name, this.opts.stage));
+    const c = (this.cond = resolveCondition(this.json, name, this.opts.stage, this.opts.weather));
     // sun and sky
     this.sun.color.copy(c.sun.color);
     this.sun.intensity = c.sun.intensity;
-    this.sun.shadow.radius = Math.max(1, c.sun.sourceAngle / 2);
+    // (rain's overcast sun has a 25° source: capped, its shadows are faint at a tenth of the light anyway)
+    this.sun.shadow.radius = Math.min(Math.max(1, c.sun.sourceAngle / 2), 6);
     // the original's sky light captured the sky itself (orange at sunset, blue at night): tint the
     // light colour by the hue of the condition's fog in-scatter, normalised to unit luminance
     const sc = c.fog.inscatter, lum = 0.2126 * sc.r + 0.7152 * sc.g + 0.0722 * sc.b;
     this.sky.color.copy(c.sky.color).multiply(sc.clone().multiplyScalar(1 / Math.max(lum, 1e-4)));
     this.sky.groundColor.copy(c.sky.lower).multiply(c.sky.color);
     const cc = CONDITION_CALIB[name] ?? { exposure: 1, sky: 1 };
-    this.sky.intensity = c.sky.intensity * this.calib.sky * cc.sky;
+    const wt = WEATHER_CALIB[this.opts.weather?.name ?? ''];
+    const wc: WeatherCalib = WCAL && wt ? { exposure: WCAL[0] ?? 1, sky: WCAL[1] ?? 1, skyGrey: WCAL[2] ?? 0 }
+      : wt?.[name] ?? wt?.default ?? { exposure: 1, sky: 1, skyGrey: 0 };
+    if (wc.skyGrey) {
+      const sl = 0.2126 * this.sky.color.r + 0.7152 * this.sky.color.g + 0.0722 * this.sky.color.b;
+      this.sky.color.lerp(new THREE.Color(sl, sl, sl), wc.skyGrey);
+    }
+    this.sky.intensity = c.sky.intensity * this.calib.sky * cc.sky * wc.sky;
     // shared material uniforms
     U.nightGlow.value = c.mpc.nightGlow;
     U.wind.value = c.mpc.wind;
     U.skyColor.value.copy(c.mpc.skyColor);
+    // weather blends (slice 8): the materials only build the weather code in rain or snow
+    const m = c.mpc;
+    U.wet.value = m.wet;
+    U.snow.value = m.snow;
+    U.precipLight.value = m.precipLight;
+    U.snowColor.value.set(m.snowColor[0], m.snowColor[1], m.snowColor[2]);
+    U.snowRoadColor.value.set(m.snowRoadColor[0], m.snowRoadColor[1], m.snowRoadColor[2], m.snowRoadColor[3]);
+    U.snowParams.value.set(m.snowParams[0], m.snowParams[1], m.snowParams[2], m.snowParams[3]);
+    U.wetParams.value.set(m.wetParams[0], m.wetParams[1], m.wetParams[2], m.wetParams[3]);
     for (const k of TINTED) {
       const t = c.mpc.tints[k] ?? [1, 1, 1, 1];
       U.tint[k].value.set(t[0], t[1], t[2], t[3]);
@@ -199,11 +243,12 @@ export class Look {
     this.scene.background = f.inscatter.clone().multiplyScalar(1);
     // post
     const p = c.post;
-    postU.exposure.value = Math.pow(2, p.exposureBias) * this.calib.exposure * cc.exposure;
+    postU.exposure.value = Math.pow(2, p.exposureBias) * this.calib.exposure * cc.exposure * wc.exposure;
     postU.toneCurve.value = p.toneCurve;
     postU.aoIntensity.value = p.aoIntensity;
     postU.whiteBalance.value.copy(whiteBalance(p.whiteTemp));
     postU.tint.value.copy(p.tint);
+    if (wc.tint) postU.tint.value.multiply(new THREE.Color(...wc.tint));
     postU.saturation.value.copy(p.saturation);
     postU.contrast.value = p.contrast;
     postU.gainShadows.value.copy(p.gainShadows);
@@ -262,7 +307,9 @@ export class Look {
     }
     // tilt-shift focus: the car's depth along the view direction
     const viewDepth = this.tmp.copy(carPos).setY(carPos.y + 0.6).sub(cam.position).dot(cam.getWorldDirection(new THREE.Vector3()));
-    this.post.update(width, height, viewDepth, { ...this.opts.dof, clear: true, scale: this.opts.dof.scale ?? 1 });
+    // the tilt-shift is stronger in rain and snow (camera.json dof.by_weather has only clear)
+    const clear = !this.opts.weather || this.opts.weather.name === 'clear';
+    this.post.update(width, height, viewDepth, { ...this.opts.dof, clear, scale: this.opts.dof.scale ?? 1 });
   }
 
   render(): void {

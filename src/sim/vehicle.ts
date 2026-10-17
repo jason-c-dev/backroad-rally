@@ -162,8 +162,18 @@ export class Vehicle {
   /** Arcade tuning in force (traction assist picks arcade or arcadeAssist). */
   a: ArcadeTuning;
   tractionAssist = true;
-  /** Weather grip per surface (slice 8). */
+  /** Weather grip per surface (slice 8): a multiplier on the clear-weather friction; empty = clear. */
   weatherGrip: Partial<Record<Surface, number>> = {};
+  /** Weather multipliers on the arcade tuning, by its JSON names (rain: handbrake_yaw_accel x1.8). */
+  weatherArcade: Record<string, number> = {};
+  /**
+   * Snow's ice patches (UE ARallyCar::UpdateIce): the ice weight 0..1 at a world point on the road (soft
+   * patch ends), and the grip there. Wheels on the road surfaces blend their weather grip toward it.
+   */
+  iceAt: ((p: Vector3) => number) | null = null;
+  iceGrip = 1;
+  /** Ice weight under each wheel, refreshed every step (0 without ice). */
+  readonly iceWeight = [0, 0, 0, 0];
 
   // drivetrain
   gear = 1;
@@ -274,7 +284,29 @@ export class Vehicle {
 
   setTractionAssist(on: boolean): void {
     this.tractionAssist = on;
-    this.a = on ? this.t.arcadeAssist : this.t.arcade;
+    const base = on ? this.t.arcadeAssist : this.t.arcade;
+    const k = Object.keys(this.weatherArcade);
+    if (!k.length) {
+      this.a = base;
+      return;
+    }
+    // UE ApplyWeather: the car's arcade tuning (for this assist mode) times the weather's multipliers
+    const a = { ...base };
+    for (const key of k) if (key in a) (a as Record<string, number>)[key] *= this.weatherArcade[key];
+    this.a = a;
+  }
+
+  /**
+   * The weather (UE ARallyCar::ApplyWeather): grip per surface, the arcade multipliers and the ice. Clear
+   * weather (empty maps, no ice) leaves the car exactly as it was.
+   */
+  applyWeather(grip: Partial<Record<Surface, number>>, arcadeScale: Record<string, number>, ice?: { grip: number; at: (p: Vector3) => number } | null): void {
+    this.weatherGrip = { ...grip };
+    this.weatherArcade = { ...arcadeScale };
+    this.iceAt = ice?.at ?? null;
+    this.iceGrip = ice?.grip ?? 1;
+    this.iceWeight.fill(0);
+    this.setTractionAssist(this.tractionAssist);
   }
 
   // ---------------------------------------------------------------- readouts (UE names)
@@ -409,6 +441,14 @@ export class Vehicle {
       w.normal.set(hit.normal.x, hit.normal.y, hit.normal.z);
       w.surface = this.surfaceAt(hit.collider, (hit as { featureId?: number }).featureId, w.contactPoint);
       this.wheelsInContact++;
+    }
+    // snow: ice under the wheels on the road surfaces (UE UpdateIce)
+    if (this.iceAt) {
+      for (let i = 0; i < 4; i++) {
+        const w = this.wheels[i];
+        const road = w.surface === 'tarmac' || w.surface === 'gravel' || w.surface === 'dirt';
+        this.iceWeight[i] = w.inContact && road ? this.iceAt(w.contactPoint) : 0;
+      }
     }
     // springs, dampers, rollbars
     for (let i = 0; i < 4; i++) {
@@ -581,8 +621,11 @@ export class Vehicle {
   surfaceGrip(i: number): number {
     const w = this.wheels[i];
     const s = this.t.surfaces[w.surface];
+    // weather grip for the surface, blended to the ice grip on an ice patch (UE UpdateWheelFriction)
+    const wg = this.weatherGrip[w.surface] ?? 1;
+    const ice = this.iceWeight[i];
     return SURFACE_FRICTION[w.surface] * this.defs[i].axle.friction * (s?.grip_scale ?? 1)
-      * (this.weatherGrip[w.surface] ?? 1) * TYRE.gripScale;
+      * (ice > 0 ? wg + (this.iceGrip - wg) * ice : wg) * TYRE.gripScale;
   }
 
   private fx = new Vector3();

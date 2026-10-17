@@ -12,6 +12,7 @@ For the story of how the game was made, read [the making-of](making-of/README.md
 - [Keys and gamepad](#keys-and-gamepad)
 - [URL options](#url-options)
 - [The look](#the-look)
+- [Weather](#weather)
 - [Quality tiers and performance](#quality-tiers-and-performance)
 - [Effects](#effects)
 - [Damage](#damage)
@@ -96,6 +97,7 @@ the terrain, its props and plants, the instance table and the road.
 | L | Livery |
 | Enter | Restart |
 | K | Next time of day |
+| J | Next weather: clear, rain, snow (the game keeps the choice and loads the stage again) |
 | P | Post-processing on or off |
 | U | Speed in km/h or mph |
 | I | Speed as a number or a dial |
@@ -128,6 +130,7 @@ Add the options to the page address, for example `?car=pip&cond=night`.
 | `?stage=test` | The flat handling test bench, not a stage |
 | `?draw=near\|medium\|far\|max` | Draw distance: ×1, ×1.5, ×2 or ×3 the base fade bands. The default is far. |
 | `?cond=morning\|afternoon\|sunset\|night\|fog` | Time of day. The default is afternoon. `?cond=stage` uses the stage's own choice for each direction (finland: sunset forward, afternoon in reverse). |
+| `?weather=clear\|rain\|snow\|stage` | The weather. The default is the last choice of the J key, else clear. `?weather=stage` uses the stage's own weather for each direction: alps forward snow, wales forward rain, vermont reverse rain, else clear. |
 | `?quality=auto\|high\|medium\|low` | Render quality. The default is auto: it measures frame times and selects the tier that holds 60 fps (see [Quality tiers and performance](#quality-tiers-and-performance)). |
 | `?scale=0.5..1` | Render scale: the game draws a smaller canvas, and the browser stretches it to the window. This pins the scale, also under auto. |
 | `?upscale=fsr` | With a render scale below 1, upscale with FSR 1 in the post chain. This is sharper, but costs more. |
@@ -183,6 +186,109 @@ steps:
 
 On WebGPU, the depth buffer cannot be multisampled and also sampled. Thus, on WebGPU the
 scene renders without MSAA, and FXAA makes the edges smooth.
+
+## Weather
+
+The weather is clear, rain or snow. It is a second setting next to the time of day, so
+every stage has 15 looks. The values are in `public/data/weather.json`. The code is in
+`src/game/weather.ts`.
+
+### Selection
+
+- `?weather=` selects it for one visit. The J key selects the next weather, keeps it in
+  the browser (`backroad-rally.run` in `src/settings.ts`) and loads the stage again. The
+  stage select (slice 9) will set the same value.
+- The intro card shows the weather after the time of day.
+
+### Grip and handling
+
+| | Tarmac | Gravel | Dirt | Grass | Rock |
+|---|---|---|---|---|---|
+| Rain | × 0.70 | × 0.86 | × 0.80 | × 0.73 | × 0.75 |
+| Snow | × 0.45 | × 0.69 | × 0.65 | × 0.64 | × 0.60 |
+
+- The weather grip multiplies the clear-weather friction of the surface under each wheel.
+- The handbrake turns the car more: the handbrake yaw help is × 1.8 in rain and × 2.6 in
+  snow. In snow, the rear grip with the handbrake on is × 0.85. The countersteer help is
+  × 1.1 in rain and × 1.15 in snow.
+- **Ice.** In snow, the tarmac has ice patches: 2.5 for each km, 14–30 m long, with grip
+  0.30. The ends blend over 3 m. They are not in the first and last 150 m, in a ford or
+  on a bridge. The original's random stream places them, so each stage has the same
+  patches in each run (japan: 7, alps: 7; the other stages have no tarmac).
+- The robot driver drives at √(weather grip) of its speed and looks up to 60 m ÷ grip
+  ahead for turns.
+
+### Look
+
+The weather changes the condition's light, fog and grade (`look` in `weather.json`).
+
+- **Rain:** the sun is × 0.1, the fog is × 2 and starts nearer, the colours are less
+  saturated. The roads are × 0.5 darker and the ground × 0.78, and both are glossier.
+  Puddles lie in the road's dips. 2600 streaks fall around the camera, and splashes come
+  up from the ground around the car. The car body is glossier, with small glints.
+- **Snow:** faces that point up are white: the cover starts where the normal's up
+  component is 0.5 and is full at 0.78, with a 3 m noise on the edge. The road is packed
+  snow with two wheel ruts. Lakes and the ford freeze. Grass tufts and flowers are not
+  shown. 4400 flakes fall and sway. Ice patches show as blue-grey glossy areas.
+- The rain streaks and the flakes are brighter in the car's headlight cone.
+- The depth of field is stronger than in clear weather, as in the original.
+- The weather code is in the shaders only in rain and snow. Clear weather has no cost from
+  it.
+- Each weather and time of day has a calibration of the exposure, the sky light and a
+  colour tint (`WEATHER_CALIB` in `src/look/look.ts`). It was measured against the
+  original's screenshots.
+
+### Effects
+
+The weather's `fx` block replaces parts of `fx.json`:
+
+- Rain: less dust, smaller and darker dust, and darker chips and skid marks. The skid
+  marks on gravel and dirt are near-black, as in clear weather (the data converter sets
+  this, `tools/convert/data.mjs`).
+- Snow: white snow powder from every surface (also tarmac), white chips and flecks, and
+  white tyre tracks behind every wheel. They stay for 60 s. The powder is darker on its
+  lower side, so that it shows against the snow.
+- Frozen fords have no drag, no spray and no splash.
+
+### Sound
+
+- Rain: the rain ambience replaces the stage's ambience, and rain sounds on the car (the
+  `weather` volume group, 0.6).
+- Snow: the snow wind replaces the ambience. A low-pass filter at 3500 Hz muffles the
+  crowd, effects and surface groups.
+- In both, the dry tyre roll is quieter (× 0.6 in rain, × 0.35 in snow), and wet, snow and
+  slush loops follow the surface under each wheel.
+
+### Handling tests in weather
+
+`npm run test:handling` runs all the tests in clear, rain and snow. Rain and snow use
+the pass bands in `testtrack.json` `targets.weather`, and the slower hairpin and power
+slide entries of each weather. Add `--weather clear` (or `rain`, `snow`) for one weather.
+
+### Performance in weather
+
+The rain streaks and the snow flakes are one draw each. The vertex shader moves them, so
+the CPU does no work for each particle. All quality tiers draw all particles
+(`PRECIP_SCALE` in `src/main.ts` can draw fewer). Snow hides the grass and flowers, so it
+draws fewer triangles than clear weather.
+
+`tools/check/perf.mjs`, 45 s from the start, frames at a 60 Hz cap. GPU is the
+timer-query mean / p95 in ms.
+
+| Stage | Weather | Integrated GPU, 1920×1080, auto | Over 25 ms | Laptop RTX, 3840×1600, high | Over 25 ms |
+|---|---|---|---|---|---|
+| alps | clear | low, GPU 10.3 / 12.9 | 0 of 2700 | GPU 11.5 / 15.8 | 83 of 2612 |
+| alps | rain | low, GPU 10.3 / 12.7 | 1 | GPU 12.0 / 16.7 | 122 of 2573 |
+| alps | snow | low, GPU 9.7 / 11.5 | 1 | GPU 10.6 / 15.8 | 42 of 2648 |
+| vermont | clear | low, GPU 10.9 / 13.7 | 16 of 2682 | GPU 10.8 / 14.9 | 35 of 2660 |
+| vermont | rain | low, GPU 10.9 / 14.1 | 28 of 2671 | GPU 10.9 / 15.2 | 37 of 2658 |
+| vermont | snow | low, GPU 10.5 / 13.2 | 10 of 2689 | GPU 9.9 / 13.3 | 4 of 2690 |
+| finland | clear | low, GPU 10.5 / 12.3 | 1 | GPU 12.5 / 14.4 | 15 of 2681 |
+| finland | rain | low, GPU 10.7 / 12.6 | 1 | GPU 12.4 / 14.6 | 22 of 2673 |
+| finland | snow | low, GPU 10.5 / 12.1 | 1 | GPU 12.5 / 14.2 | 15 of 2677 |
+
+The weather adds less than the noise between runs. The alps larch forest stays the
+heaviest part at high on the laptop RTX.
 
 ## Quality tiers and performance
 
@@ -560,7 +666,7 @@ The check scripts use headless Chrome through playwright-core:
   puts the car on the road at fixed spots, at 25 km/h. It saves a screenshot for
   each condition, spot and size, with the HUD hidden. `--perf` holds each spot and
   prints frame times. Add `--params gputime` for the GPU time.
-- `node tools/check/stages.mjs [--webgl] [--stages japan,wales] [--dirs fwd,rev] [--conds morning,night,stage] [--headed]`
+- `node tools/check/stages.mjs [--webgl] [--stages japan,wales] [--dirs fwd,rev] [--conds morning,night,stage] [--weathers clear,rain,snow] [--headed]`
   loads each stage for each direction and time of day. It reports console errors, load
   and build times, instances, colliders, fords, bridges and canyon zones. It saves a
   screenshot at the start. `--headed` opens a normal window, for WebGPU.

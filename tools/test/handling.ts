@@ -2,7 +2,12 @@
 // Same manoeuvres, scripted drivers and pass bands; the car is src/sim/vehicle.ts on Rapier.
 //
 //   npx tsx tools/test/handling.ts [--cars swift,pip|all] [--kinds feel|all|corner,brake,...]
-//                                  [--surfaces tarmac,gravel] [--ue <ue_feel.txt>] [--csv out.csv] [--quiet]
+//                                  [--surfaces tarmac,gravel] [--weather clear|rain|snow|all]
+//                                  [--ue <ue_feel.txt>] [--csv out.csv] [--quiet]
+//
+// --weather (slice 8): the cars drive with the weather's grip and arcade multipliers (weather.json), the
+// manoeuvres take their weather blocks (hairpin.weather.rain: a slower entry) and the bands come from
+// targets.weather.<weather> first, as in the original. `all` runs clear, rain and snow one after the other.
 //
 // Prints one line per job in the UE format ("<car> <kind> <surface> <result> PASS|FAIL|info"), then a
 // summary. With --ue, the UE build's line for the same job is printed under each result.
@@ -16,6 +21,8 @@ import { buildTestTrackPhysics } from '../../src/sim/testTrackPhysics';
 import { loadCarTuning } from '../../src/sim/tuning';
 import { TYRE, Vehicle, noInput, type DriverInput } from '../../src/sim/vehicle';
 import { createArcade } from '../../src/sim/arcade';
+import { deepMerge } from '../../src/sim/tuning';
+import { arcadeScale, weatherDef, WEATHERS, type WeatherJson, type WeatherName } from '../../src/game/weather';
 import type { TestTrack } from '../../src/data';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -67,6 +74,11 @@ for (const p of track.pads) {
 const circleR = num(track.tests as Json, 'circle_radius_m', 40);
 const handbrakeEntryKmh = num(track.tests as Json, 'handbrake_entry_kmh', 60);
 const targets: Json = track.targets;
+const weatherJson = data('weather.json') as WeatherJson;
+/** The weather the jobs run in (main() sets it before each batch). */
+let weather: WeatherName = 'clear';
+/** A manoeuvre's config with its weather block merged in (UE: <block>.weather.<weather>). */
+const withWeather = (block: Json | undefined): Json => deepMerge(block ?? {}, (block?.weather as Json | undefined)?.[weather] as Json | undefined);
 
 // ---------------------------------------------------------------- jobs
 interface Job { car: string; kind: string; surface: string; param: number; ta: number }
@@ -144,11 +156,16 @@ class Run {
 
   constructor(public job: Job, public rapier: typeof RAPIER, public ps: PsMemory) {}
 
+  /** A pass band: the weather's own first (targets.weather.<weather>), then the clear one (UE Goal). */
   goal(key: string, d: number): number {
+    const perWeather = (targets.weather as Json | undefined)?.[weather] as Json | undefined;
     if (this.job.ta === 0) {
       const off = targets.ta_off as Json;
+      const offW = (off?.weather as Json | undefined)?.[weather] as Json | undefined;
+      if (offW && typeof offW[key] === 'number') return offW[key];
       if (off && typeof off[key] === 'number') return off[key];
     }
+    if (perWeather && typeof perWeather[key] === 'number') return perWeather[key];
     return num(targets, key, d);
   }
   verdict(ok: boolean) {
@@ -163,6 +180,10 @@ class Run {
     const surf = buildTestTrackPhysics(this.rapier, this.world, track);
     this.car = new Vehicle(this.rapier, this.world, tuning, surf, carJson.wheel_pos_cm);
     if (!noArcade) this.car.arcade = createArcade(this.car);
+    if (weather !== 'clear') {
+      const w = weatherDef(weatherJson, weather);
+      this.car.applyWeather(w.grip, arcadeScale(w));
+    }
     const pad = `pad_${j.surface}`;
     let pose: Pose;
     if (j.kind === 'accel' || j.kind === 'brake') {
@@ -171,13 +192,13 @@ class Run {
       const c = padCenters[pad];
       pose = { p: { x: c.x, y: c.y - circleR }, yaw: 0 };
     } else if (j.kind === 'powerslide') {
-      this.Ps = track.powerslide as Json;
+      this.Ps = withWeather(track.powerslide as Json);
       const c = padCenters[pad];
       pose = { p: { x: c.x, y: c.y - num(this.Ps, 'radius_m', 25) }, yaw: 0 };
       const key = j.car + j.surface;
       if (key !== this.ps.key) Object.assign(this.ps, { key, holdGain: 0, holdYawRatio: 0, offGain: 0, offYawRatio: 0, partGain: 0 });
     } else if (j.kind === 'highspeedtap' || j.kind === 'lanechange') {
-      this.Kd = (track as Json)[j.kind];
+      this.Kd = withWeather((track as Json)[j.kind]);
       pose = poses[`strip_${j.surface}`];
       this.KdKeys = (this.Kd.keys ?? [[0, 1], [0.15, 0]]) as [number, number][];
       this.KdLastKeyT = this.KdKeys[this.KdKeys.length - 1][0];
@@ -187,7 +208,7 @@ class Run {
     this.startLoc = pose.p;
     this.startYaw = pose.yaw;
     if (j.kind === 'hairpin') {
-      this.Hp = track.hairpin as Json;
+      this.Hp = withWeather(track.hairpin as Json);
       this.HpRadiusM = num(this.Hp, 'radius_m', 13);
       this.HpHalfWidthM = num(this.Hp, 'half_width_m', 4);
       const f = fwd2(this.startYaw);
@@ -839,40 +860,52 @@ async function main() {
     }
   }
   const rapier = await initPhysics();
+  const weathers = (arg('--weather', 'clear')!).split(',').flatMap((w) => (w === 'all' ? [...WEATHERS] : [w])) as WeatherName[];
+  for (const w of weathers) if (!WEATHERS.includes(w)) throw new Error(`unknown weather ${w}`);
   const jobs = expandJobs(cars, kinds, surfaces);
-  const ps: PsMemory = { key: '', holdGain: 0, holdYawRatio: 0, offGain: 0, offYawRatio: 0, partGain: 0 };
   const lines: string[] = [];
-  let pass = 0, fail = 0;
-  const failed: string[] = [];
-  const t0 = performance.now();
-  for (const job of jobs) {
-    const run = new Run(job, rapier, ps);
-    run.begin();
-    let steps = 0;
-    while (!run.done && steps < 120 * 150) {
-      run.tick();
-      steps++;
+  const summary: string[] = [];
+  let failedAny = false;
+  for (const w of weathers) {
+    weather = w;
+    const ps: PsMemory = { key: '', holdGain: 0, holdYawRatio: 0, offGain: 0, offYawRatio: 0, partGain: 0 };
+    let pass = 0, fail = 0;
+    const failed: string[] = [];
+    const t0 = performance.now();
+    if (weathers.length > 1 || w !== 'clear') console.log(`\n---- weather ${w}`);
+    for (const job of jobs) {
+      const run = new Run(job, rapier, ps);
+      run.begin();
+      let steps = 0;
+      while (!run.done && steps < 120 * 150) {
+        run.tick();
+        steps++;
+      }
+      if (!run.done) run.finish('timeout FAIL');
+      run.world.free();
+      const key = `${job.car} ${kindName(job)} ${job.surface}`;
+      const line = `${key} ${run.result}`;
+      lines.push(w === 'clear' ? line : `${w} ${line}`);
+      if (line.endsWith('PASS')) pass++;
+      else if (line.endsWith('FAIL')) {
+        fail++;
+        failed.push(key);
+      }
+      if (!quiet || line.endsWith('FAIL')) {
+        console.log(line);
+        if (ue.has(key)) console.log(`   ue: ${ue.get(key)}`);
+      }
     }
-    if (!run.done) run.finish('timeout FAIL');
-    run.world.free();
-    const key = `${job.car} ${kindName(job)} ${job.surface}`;
-    const line = `${key} ${run.result}`;
-    lines.push(line);
-    if (line.endsWith('PASS')) pass++;
-    else if (line.endsWith('FAIL')) {
-      fail++;
-      failed.push(key);
-    }
-    if (!quiet || line.endsWith('FAIL')) {
-      console.log(line);
-      if (ue.has(key)) console.log(`   ue: ${ue.get(key)}`);
-    }
+    const line = `${w}: ${jobs.length} jobs, ${pass} pass, ${fail} fail, ${jobs.length - pass - fail} info (${((performance.now() - t0) / 1000).toFixed(1)} s)`;
+    console.log(`\n${line}`);
+    if (failed.length) console.log(`failed: ${failed.join(', ')}`);
+    summary.push(line);
+    failedAny ||= fail > 0;
   }
-  console.log(`\n${jobs.length} jobs, ${pass} pass, ${fail} fail, ${jobs.length - pass - fail} info (${((performance.now() - t0) / 1000).toFixed(1)} s)`);
-  if (failed.length) console.log(`failed: ${failed.join(', ')}`);
+  if (summary.length > 1) console.log(`\n${summary.join('\n')}`);
   const csv = arg('--csv');
   if (csv) writeFileSync(csv, lines.join('\n') + '\n');
-  process.exitCode = fail ? 1 : 0;
+  process.exitCode = failedAny ? 1 : 0;
 }
 
 main();

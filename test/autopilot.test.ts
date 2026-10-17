@@ -26,6 +26,7 @@ function car(x: number, z: number, yawDeg: number, kmh: number): Vehicle {
   return {
     position: new Vector3(x, 0, z), yawDeg, forwardSpeedKmh: kmh, bodySlipDeg: 0, wheelsInContact: 4,
     powerStrength: 0, powerUnder: 0, smoothedSteer: 0,
+    wheels: [0, 1, 2, 3].map(() => ({ inContact: true, surface: 'gravel' })), weatherGrip: {},
   } as unknown as Vehicle;
 }
 
@@ -59,5 +60,21 @@ describe('autopilot', () => {
     expect(ap.last.vmax).toBeCloseTo(120 * DEFAULT_AUTOPILOT.minTurn, 0);
     expect(input.throttle).toBe(0);
     expect(input.brake).toBeGreaterThan(0.2);
+  });
+});
+
+describe('autopilot in weather', () => {
+  it('drives at sqrt(weather grip) of its speed on the surface under most wheels', () => {
+    // on the straight, far enough from the corner that the longer look-ahead (60 m / grip) doesn't reach it
+    const road = new Road(corner());
+    const tracker = new RoadTracker(road, 0, 300);
+    const ap = new Autopilot(road, tracker, { ...DEFAULT_AUTOPILOT, kmh: 120 });
+    const v = car(2, 0, 0, 60);
+    tracker.update(v.position, 1 / 120);
+    ap.drive(v, 1 / 120, 1);
+    const clear = ap.last.vmax;
+    (v as unknown as { weatherGrip: Record<string, number> }).weatherGrip = { gravel: 0.64 };
+    ap.drive(v, 1 / 120, 1);
+    expect(ap.last.vmax).toBeCloseTo(clear * 0.8);
   });
 });

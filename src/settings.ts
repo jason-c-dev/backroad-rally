@@ -5,6 +5,7 @@
 //
 //   hud    { units: 'kmh' | 'mph', speedo: 'number' | 'dial', size: 80..130 (%), debug: boolean }
 //   audio  { master, muted, groups: { engine, surface, sfx, ui, music, ambience, crowd, weather } }
+//   run    { weather: 'clear' | 'rain' | 'snow' | 'stage' }   (the stage select will set it; key J for now)
 //
 // URL options override a section for one page load without saving it (?units=mph, ?speedo=dial, ?hud=110);
 // changing a setting in the game (keys U and I, the audio panel) saves it.
@@ -70,4 +71,28 @@ export function loadHudSettings(params?: URLSearchParams): HudSettings {
 
 export function saveHudSettings(s: HudSettings): void {
   writeSection('hud', s);
+}
+
+/**
+ * The run's setup that the stage select (slice 9) will set: for now the weather. `stage` = the stage's own
+ * weather for its direction (weather.json stage_defaults). Stored as `backroad-rally.run`; ?weather= overrides
+ * it for one page load. The key J cycles it (and saves it).
+ */
+export interface RunSettings {
+  weather: 'clear' | 'rain' | 'snow' | 'stage';
+}
+
+export const RUN_DEFAULTS: RunSettings = { weather: 'clear' };
+
+const WEATHER_CHOICES = ['clear', 'rain', 'snow', 'stage'] as const;
+
+export function loadRunSettings(): RunSettings {
+  const s = { ...RUN_DEFAULTS };
+  const stored = readSection<RunSettings>('run');
+  if (stored && (WEATHER_CHOICES as readonly string[]).includes(stored.weather as string)) s.weather = stored.weather!;
+  return s;
+}
+
+export function saveRunSettings(s: RunSettings): void {
+  writeSection('run', s);
 }
