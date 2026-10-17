@@ -36,9 +36,18 @@ const FILES = [
   ...['swift', 'pip', 'lama', 'quint', 'kaze'].map((id) => `cars/${id}.json`),
 ];
 
-// Public names must stay our own (the repo is public). Overrides for source names that
-// refer to a real company, by file and path so the old name never appears here.
-const OVERRIDES = { 'cars/kaze.json': { 'liveries.1.name': 'rally white' } };
+// Overrides by file and path. Public names must stay our own (the repo is public), so source
+// names that refer to a real company are replaced here and the old name never appears.
+// The port's own look changes go here too.
+const OVERRIDES = {
+  'cars/kaze.json': { 'liveries.1.name': 'rally white' },
+  // Skid marks on gravel and dirt: the original's mid browns read as light orange on the lit
+  // road; darker on playtest (2026-10-16).
+  'fx.json': {
+    'skid.surfaces.gravel': { color: '#2E2620', opacity: 0.7 },
+    'skid.surfaces.dirt': { color: '#2A221C', opacity: 0.65 },
+  },
+};
 
 function strip(v) {
   if (Array.isArray(v)) return v.map(strip);
