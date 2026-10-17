@@ -9,9 +9,12 @@ The web game is a work in progress. This list gives the known differences on
 
 ### Content
 
-- Only finland is playable now. The other five stages are in progress.
+- All six stages are playable in the two directions. You select them with keys or the
+  URL, because there is no stage select yet.
 - There is no rain or snow, no menus, no garage, no career and no ghosts yet.
-- The fords are not converted, so the water has no splash and no drag.
+- On arizona, the car bounces longer after a landing in the wash dips (0.8 s, against
+  0.55 s in UE). Thus some robot runs there are more than 5% slower than in UE.
+- The animals do not move, and the canyon shade on arizona is too dark.
 
 ### Handling
 

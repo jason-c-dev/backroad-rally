@@ -39,8 +39,8 @@ if (!existsSync(exportDir) || !existsSync(join(dataDir, 'audio.json'))) {
   process.exit(1);
 }
 
-/** Music this slice ships: location-free menu and night tracks, and the stages built so far. */
-const MUSIC_LOCATIONS = ['finland'];
+/** Music the game ships: location-free menu and night tracks, and every stage's own. */
+const MUSIC_LOCATIONS = ['finland', 'japan', 'alps', 'wales', 'arizona', 'vermont'];
 const SR = 48000;
 const PAD = 4800; // 0.1 s of wrap-around on each side of a loop
 const BITRATE = {

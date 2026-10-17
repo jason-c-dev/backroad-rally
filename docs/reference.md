@@ -8,6 +8,7 @@ For the story of how the game was made, read [the making-of](making-of/README.md
 
 - [Development](#development)
 - [A stage run](#a-stage-run)
+- [Stages](#stages)
 - [Keys and gamepad](#keys-and-gamepad)
 - [URL options](#url-options)
 - [The look](#the-look)
@@ -34,11 +35,12 @@ npm run build      # production build into dist/, served under /backroad-rally/
 
 ## A stage run
 
-The game opens on the first stage, finland. A run has these steps:
+The game opens on the first stage, finland. N moves to the next stage, and Shift+N to
+the previous stage. B runs the stage in the other direction. A run has these steps:
 
 1. An intro card shows.
 2. A 3-2-1 countdown starts. The clock starts on "go".
-3. You drive about 3 km of gravel to the finish arch.
+3. You drive about 3 km to the finish arch.
 4. The result shows.
 
 These rules apply during the run:
@@ -49,6 +51,37 @@ These rules apply during the run:
 - Enter restarts the stage.
 - A sufficiently hard crash wrecks the car. The car coasts to a stop, and the run ends as
   "dnf · terminal damage".
+
+## Stages
+
+There are six point-to-point stages of about 3 km. You can drive each stage forward or
+in reverse. Until there is a stage select, use `?stage=` and `?dir=reverse`, or N and B
+in the game. The game downloads only the stage that you select. A stage is 4.4–5.1 MB:
+the terrain, its props and plants, the instance table and the road.
+
+| Stage | Road | Features |
+|---|---|---|
+| finland | gravel | crest jump, lakeside meadow, wooden bridge and log chicane, yumps |
+| japan | tarmac with lines | cherry-blossom avenue, a ladder of four hairpins, river bridge |
+| alps | tarmac | five switchbacks, snow poles, a tarn, cows with bells |
+| wales | gravel | stone walls, a ford through a stream, the moor, a slate quarry, sheep |
+| arizona | gravel, with a cracked-tarmac start | wash dips with four jumps, a one-lane canyon, buttes on the skyline |
+| vermont | gravel | a covered bridge over the river, the sugar-maple tunnel, a pond |
+
+- **Fords.** The water slows the car when it is below the wheels' depth and faster than
+  8 km/h. The drag is 0.15 × the speed, per second. The car throws spray to the two
+  sides, and you hear a splash.
+- **Canyon walls.** While the car is in the canyon, the walls between the camera and the
+  car dither out. The roof of the covered bridge does the same. It casts no shadow while
+  the car is under it.
+- **Each stage has its own** ambience and music, location sounds near the animals
+  (cowbells, sheep), water colour, and light for each time of day. `?cond=stage` selects
+  the stage's own time for each direction.
+- **Instance table.** The table holds each plant and prop as x, y, z, heading, scale and
+  tint. The converter quantizes the values to 16 bits (about 5 cm on a 3 km stage) and
+  compresses the table with gzip. The browser's `DecompressionStream` unpacks it at load.
+  The converter removes some dense scatter far from the road, as the original did at load
+  (the trees on vermont and the cherry trees on japan).
 
 ## Keys and gamepad
 
@@ -70,6 +103,8 @@ These rules apply during the run:
 | M | Mute |
 | V | The volume panel |
 | . and , | Next and previous music track |
+| N / Shift+N | Next / previous stage |
+| B | The other direction |
 
 A gamepad also works:
 
@@ -88,10 +123,11 @@ Add the options to the page address, for example `?car=pip&cond=night`.
 | Option | Effect |
 |---|---|
 | `?car=<id>` | The car: swift, pip, lama, quint or kaze |
+| `?stage=<id>` | The stage: finland (the default), japan, alps, wales, arizona or vermont |
 | `?dir=reverse` | Run the stage backwards |
 | `?stage=test` | The flat handling test bench, not a stage |
 | `?draw=near\|medium\|far\|max` | Draw distance: ×1, ×1.5, ×2 or ×3 the base fade bands. The default is far. |
-| `?cond=morning\|afternoon\|sunset\|night\|fog` | Time of day. The default is afternoon. `?cond=stage` uses the stage's own choice (finland: sunset forward, afternoon in reverse). |
+| `?cond=morning\|afternoon\|sunset\|night\|fog` | Time of day. The default is afternoon. `?cond=stage` uses the stage's own choice for each direction (finland: sunset forward, afternoon in reverse). |
 | `?quality=auto\|high\|medium\|low` | Render quality. The default is auto: it measures frame times and selects the tier that holds 60 fps (see [Quality tiers and performance](#quality-tiers-and-performance)). |
 | `?scale=0.5..1` | Render scale: the game draws a smaller canvas, and the browser stretches it to the window. This pins the scale, also under auto. |
 | `?upscale=fsr` | With a render scale below 1, upscale with FSR 1 in the post chain. This is sharper, but costs more. |
@@ -107,7 +143,7 @@ Add the options to the page address, for example `?car=pip&cond=night`.
 | `?audio=0` | No sound |
 | `?gputime` | Measure the GPU time for each frame with timer queries (for the check scripts) |
 | `?webgl` | Use the WebGL2 renderer, not WebGPU |
-| `?autopilot=120` | A robot drives: pure pursuit on the centreline, at 120 km/h maximum. Add `&minturn=0.3`, or `&apkeys=1` or `2` for a keyboard-style robot. |
+| `?autopilot=120` | A robot drives: pure pursuit on the centreline, at 120 km/h maximum. Add `&minturn=0.3`. `&apkeys=1` drives as a good keyboard player (it taps toward the steer that it wants). `&apkeys=2` drives as a heavy-handed player (it holds the key). |
 | `?timescale=4` | Run the game four times faster than the clock (for headless checks) |
 
 ## The look
@@ -208,6 +244,24 @@ The HUD shows the tier, the scale and `(auto)`. `?quality=<tier>` pins the tier.
   WebGPU adapter and the WebGL2 context. Browsers can ignore it. Desktop Chrome on Linux
   draws with the GPU that it runs on. On a hybrid laptop, that is the integrated GPU.
 
+### Performance on each stage
+
+`tools/check/perf.mjs --stage <id>` drives 45 s from the start, with frames at a 60 Hz
+cap. GPU is the timer-query mean / p95 in ms. On an integrated GPU, this value is too low.
+
+| Stage | Integrated GPU, 1920×1080, auto | Over 25 ms | Laptop RTX, 3840×1600, high | Over 25 ms |
+|---|---|---|---|---|
+| finland | low, GPU 10.5 / 12.4 | 2 of 2696 | GPU 12.3 / 14.3 | 13 of 2688 |
+| japan | low, GPU 10.3 / 11.4 | 0 | GPU 10.8 / 12.8 | 0 |
+| alps | low, GPU 9.9 / 12.6 | 0 | GPU 11.7 / 15.8 | 85–90 of ~2610 |
+| wales | low, GPU 9.4 / 10.7 | 2 | GPU 9.1 / 11.7 | 1 |
+| arizona | low, GPU 9.2 / 10.1 | 0 | GPU 8.9 / 11.3 | 0 |
+| vermont | low, GPU 10.8 / 13.9 | 24 of 2675 | GPU 11.1 / 14.8 | 33–46 of ~2660 |
+
+The heaviest parts are the larch forest on alps (s 600–1000) and the sugar-maple tunnel
+on vermont (s 900–1800). Their dense canopies use 14–16 ms of GPU time. On full-stage
+runs, alps dropped 1 frame in total (high), and vermont dropped 7 (integrated GPU).
+
 ## Effects
 
 The effects are in `src/fx/` and `src/world/crowd.ts`. The values are in
@@ -277,7 +331,7 @@ turbo cars also have an anti-lag crackle. The flames are bright enough for bloom
 
 ### Spectators
 
-- The spectators stand in the stage's crowd groups off the road (finland: 292).
+- The spectators stand in the stage's crowd groups off the road (182–292 on each stage).
 - They hop when the car passes near and fast, and they step away from it.
 - They react as a group: cheers, a near miss, a gasp, a groan after a crash near them,
   and applause at the finish.
@@ -388,11 +442,14 @@ The audio code is in `src/audio/` and uses Web Audio.
   in the air.
 - **Rev limiter.** Its cuts are scheduled on the audio clock.
 - **Tyres.** The roll and skid sounds follow the surface under each wheel.
-- **Stage sounds.** The stage adds the ambience (day or night), the crowd from the
-  nearest spectators, the bridge rumble, the countdown and the finish.
-- **Event sounds.** Crowd reactions, impacts, landings and backfires come from
+- **Stage sounds.** The stage adds the ambience (the stage's own by day, one night
+  sound for all stages), the crowd from the nearest spectators, the wooden-bridge rumble,
+  the countdown and the finish. Cowbells and sheep sound from time to time near the
+  animals.
+- **Event sounds.** Crowd reactions, impacts, landings, ford splashes and backfires come from
   `src/game/events.ts`.
-- **Music.** The music streams, and gets slightly quieter at full throttle.
+- **Music.** The music streams: the stage's own tracks, and calm night tracks at night.
+  It gets slightly quieter at full throttle.
 - The audio code only reads the game. The simulation runs the same with or without it.
 
 ### The mix
@@ -410,7 +467,8 @@ Final volume = level × 10^(dB/20) × group × user.
 
 - every effect, engine and interface sound as Ogg Opus, plus an AAC copy for browsers
   without Opus (decoded at load);
-- the music for the stages that exist now, as Opus only (streamed);
+- the music (menu, night and the tracks of each stage, about 69 MB), as Opus only
+  (streamed, one track at a time);
 - `manifest.json` and `mix.json`.
 
 The converter pads each loop with its own wrap-around, so the codec cannot put a click
@@ -469,9 +527,9 @@ site does not need it.
 |---|---|
 | `node tools/convert/data.mjs` | `public/data/`: the game data as JSON, in engine units. `src/ue.ts` converts them at load. |
 | `blender -b -P tools/blender/export_car_glb.py -- --car all` | `public/assets/cars/<id>.glb` (Blender 5.2) |
-| `node tools/convert/stage.mjs finland` | `public/data/stages/<id>.json` (road, variants, tiles) and `.bin` (instances, six floats each). It prints the environment meshes that the stage needs. |
-| `blender -b <source>/Art/Source/Stages/<id>.blend -P tools/blender/export_stage_glb.py -- --stage finland` | `public/assets/stages/<id>.glb`: terrain tiles, backdrop and bridges. The material names are the surfaces. |
-| `blender -b -P tools/blender/export_env_glb.py -- --meshes <list> --name finland` | `public/assets/env/env_<id>.glb`: the stage's vegetation and props, one node for each mesh |
+| `node tools/convert/stage.mjs <id>` | `public/data/stages/<id>.json` (road, variants, tiles, fords, water) and `.bin` (the instance table, quantized and compressed with gzip). It prints the environment meshes that the stage needs. |
+| `blender -b <source>/Art/Source/Stages/<id>.blend -P tools/blender/export_stage_glb.py -- --stage <id>` | `public/assets/stages/<id>.glb`: terrain tiles, backdrop and bridges. The material names are the surfaces. |
+| `blender -b -P tools/blender/export_env_glb.py -- --meshes <list> --name <id>` | `public/assets/env/env_<id>.glb`: the stage's vegetation and props, one node for each mesh |
 | `node tools/convert/glb.mjs <in.glb> [out.glb]` | Compresses a GLB for the web: removes the flat normals (but keeps them on foliage, where the canopy normals shape the shading), welds, quantizes, and applies meshopt |
 | `node tools/convert/fonts.mjs` | `public/fonts/`: the HUD's Inter faces (regular, semibold) as WOFF2, with their licence. It needs `woff2_compress`. |
 
@@ -502,7 +560,11 @@ The check scripts use headless Chrome through playwright-core:
   puts the car on the road at fixed spots, at 25 km/h. It saves a screenshot for
   each condition, spot and size, with the HUD hidden. `--perf` holds each spot and
   prints frame times. Add `--params gputime` for the GPU time.
-- `node tools/check/stage.mjs [--webgl] [--cars swift,pip] [--dirs fwd,rev] [--kmh 120] [--cond night] [--params "quality=medium"]`
+- `node tools/check/stages.mjs [--webgl] [--stages japan,wales] [--dirs fwd,rev] [--conds morning,night,stage] [--headed]`
+  loads each stage for each direction and time of day. It reports console errors, load
+  and build times, instances, colliders, fords, bridges and canyon zones. It saves a
+  screenshot at the start. `--headed` opens a normal window, for WebGPU.
+- `node tools/check/stage.mjs [--webgl] [--stage japan] [--cars swift,pip] [--dirs fwd,rev] [--kmh 120] [--cond night] [--params "quality=medium"]`
   runs the full stage with the autopilot, four times faster than real time. It prints
   the time for each car and direction, the resets, the spins and the surfaces under the
   wheels. With `--perf --size 3840x1600 --seconds 60`, it runs at real time and prints

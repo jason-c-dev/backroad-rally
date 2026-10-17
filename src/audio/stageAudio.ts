@@ -26,6 +26,8 @@ export interface StageAudioOpts {
   tracker: RoadTracker | null;
   /** s ranges (m) of the wooden bridge decks. */
   bridges: [number, number][];
+  /** Animals on the stage (three metres): the location one-shots (cowbells, sheep) play at the nearest. */
+  animals?: { x: number; y: number; z: number }[];
   phase(): string;
   isNight(): boolean;
 }
@@ -48,6 +50,7 @@ export class StageAudio {
   private hasLast = false;
   private offs: (() => void)[] = [];
   private familyCache = new Map<string, string>();
+  private oneShotTimer = 0;
 
   static sounds(sys: AudioSystem, o: Pick<StageAudioOpts, 'stageId'>): string[] {
     const m = sys.mix;
@@ -58,6 +61,7 @@ export class StageAudio {
       'A_Countdown_Beep', 'A_Countdown_Go', 'A_Finish_Chime', 'A_Reset_Whoosh',
       ...reactions, ...sys.family('A_Impact_Hard'), ...sys.family('A_Impact_Soft'), ...sys.family('A_Land'),
       ...sys.family('A_Water_Splash'),
+      ...(st.location_oneshots?.[o.stageId] ? sys.family(st.location_oneshots[o.stageId].sounds) : []),
     ];
   }
 
@@ -187,6 +191,27 @@ export class StageAudio {
     this.rumble = smooth(this.rumble, target, 12, dt);
     const br = st.bridge;
     this.bridge.set(this.rumble * (br.volume ?? 1), (br.pitch_min ?? 0.85) + this.rumble * (br.pitch_span ?? 0.3), dt);
+
+    // location one-shots (UE TickLocationSounds): now and then, at the nearest animal within range
+    this.oneShotTimer -= dt;
+    const shot = st.location_oneshots?.[this.o.stageId];
+    if (this.oneShotTimer <= 0 && this.o.phase() !== 'loading') {
+      const rand = (a: number, b: number) => a + Math.random() * (b - a);
+      this.oneShotTimer = shot ? rand(shot.gap_s?.[0] ?? 4, shot.gap_s?.[1] ?? 10) : 5;
+      if (shot && this.o.animals?.length) {
+        const range = (shot.range_cm ?? 6000) / 100;
+        let at: { x: number; y: number; z: number } | null = null;
+        let bestD = range * range;
+        for (const a of this.o.animals) {
+          const d = (a.x - p.x) ** 2 + (a.y - p.y) ** 2 + (a.z - p.z) ** 2;
+          if (d < bestD) {
+            bestD = d;
+            at = a;
+          }
+        }
+        if (at) sys.playRandom(shot.sounds, 'ambience', shot.volume ?? 1, rand(0.93, 1.07), { pos: at });
+      }
+    }
 
     // music: day/night playlist, the duck at full throttle and high revs while running
     if (night !== this.night) {

@@ -66,6 +66,7 @@ Play in the browser: **<https://jason-c-dev.github.io/backroad-rally/>**
 | C | Camera |
 | K | Next time of day |
 | M / V | Mute / volumes |
+| N / B | Next stage / other direction |
 
 A gamepad also works: the triggers, the left stick, L1 for the handbrake and Y to
 recover. The [reference](docs/reference.md#keys-and-gamepad) has all the keys and URL
@@ -73,8 +74,8 @@ options.
 
 **Now in the game:**
 
-- **One stage:** finland, about 3 km of gravel with a crest jump, a lake, a bridge and
-  crowds, forward or in reverse (`?dir=reverse`). Five more stages are in progress.
+- **Six stages** (N for the next): finland, japan, alps, wales, arizona and vermont, about
+  3 km each, with jumps, bridges, a ford, a canyon and crowds. B runs a stage in reverse.
 - **Five cars** (`?car=`): swift and pip (1960s, rear-wheel and front-wheel drive), lama
   (1970s, mid-engine), quint (1980s, four-wheel drive turbo) and kaze (1990s, four-wheel
   drive turbo).

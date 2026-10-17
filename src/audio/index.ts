@@ -70,6 +70,7 @@ export async function startAudio(o: AudioOpts): Promise<AudioHandle | null> {
     road: st?.road ?? null,
     tracker: o.level.tracker ?? null,
     bridges,
+    animals: st?.animals ?? [],
     phase: () => o.level.run?.phase ?? 'running',
     isNight: o.isNight,
   });
