@@ -2,7 +2,7 @@
 
 [![Play](https://img.shields.io/badge/play-in_browser-2ea44f?logo=googlechrome&logoColor=white)](https://jason-c-dev.github.io/backroad-rally/)
 [![Pages deploy](https://img.shields.io/github/actions/workflow/status/jason-c-dev/backroad-rally/pages.yml?branch=main&label=pages&logo=github)](https://github.com/jason-c-dev/backroad-rally/actions/workflows/pages.yml)
-![Status](https://img.shields.io/badge/status-work_in_progress-orange)
+![Status](https://img.shields.io/badge/status-playable-2ea44f)
 [![License](https://img.shields.io/github/license/jason-c-dev/backroad-rally)](LICENSE)
 ![TypeScript](https://img.shields.io/github/package-json/dependency-version/jason-c-dev/backroad-rally/dev/typescript?logo=typescript&logoColor=white&color=3178c6)
 ![three.js](https://img.shields.io/github/package-json/dependency-version/jason-c-dev/backroad-rally/three?logo=threedotjs&label=three.js&color=049ef4)
@@ -17,10 +17,9 @@
 [![Last commit](https://img.shields.io/github/last-commit/jason-c-dev/backroad-rally)](https://github.com/jason-c-dev/backroad-rally/commits/main)
 
 A small top-down rally game with a diorama look, for the browser. It is a free,
-open-source, non-commercial demo and a work in progress, made in vertical slices. The
-plan is five cars from four eras, six point-to-point stages, and times of day
-and weather that change. A short career against simulated rivals, who also race as ghosts, comes
-last.
+open-source, non-commercial demo, made in eleven vertical slices. It has five cars from
+four eras, six point-to-point stages, five times of day, rain and snow, and a short
+career against nine simulated rivals, who also race as ghosts.
 
 ## Made with Claude Code and other apps
 
@@ -56,8 +55,8 @@ how.
 
 Play in the browser: **<https://jason-c-dev.github.io/backroad-rally/>**
 
-The game opens on the title screen. Choose quick stage or time attack, then a car and a
-stage. The menus work with the keyboard, the mouse or a gamepad.
+The game opens on the title screen. Choose career, quick stage or time attack, then a
+car and a stage. In time attack you race the ghost of your best run. The menus work with the keyboard, the mouse or a gamepad.
 
 | Key | Action |
 |---|---|

@@ -6,8 +6,8 @@
 
 | Who | Does |
 |---|---|
-| The developer | Gives the idea and the taste. Plays the builds. Makes the decisions. Reviews and merges every pull request. |
-| The orchestrator | One main Claude Code session. It plans with the developer, writes the briefs, starts the agents, checks their results and makes the commits. |
+| The developer | Gives the idea and the taste. Plays the builds. Makes the decisions. Reviewed and merged the pull requests up to #19. |
+| The orchestrator | One main Claude Code session. It plans with the developer, writes the briefs, starts the agents, checks their results and makes the commits. From #20, it also merges its own pull requests after the checks. |
 | The agents | Background Claude Code agents. Each agent does one slice of work from a written brief and ends with a report. |
 
 ## The orchestrator stays small
@@ -81,6 +81,8 @@ developer made the large decisions. Some examples from the web port:
 | 16 Oct | Night music | Keep the calm night playlist, as in the original |
 | 16 Oct | Skid marks on gravel look light orange | Make them darker: about `#2E2620` at 0.7 opacity, not `#6A4E34` at 0.6 (queued) |
 | 16 Oct | The documentation | Name art of rally as the inspiration, with a link. Publish the model, the plan, the tokens and the cost. |
+| 16 Oct | A white flash on the page every few loads | Caused by auto quality: it stopped with the quality set to high. Fixed in the polish slice (#22). |
+| 17 Oct | Finish the plan overnight | The orchestrator does slices 8 to 11 without the developer, and "you can merge as we go in future, so avoid conflicts later". |
 
 In the Unreal game, the developer once asked for upscaler options to stop a stutter.
 The agent found the real cause first, which was uneven frame pacing. The developer
@@ -89,7 +91,8 @@ agreed: "cause fix is better and those options are only valid if they help".
 ## Branches and pull requests
 
 - No agent and no orchestrator pushes to `main`. Each slice has its own branch and pull
-  request, and the developer merges it.
+  request. The developer merged them up to #19. From #20, the orchestrator merged each
+  one after the checks, so the next slice could start from the new `main`.
 - Each branch starts from `main`. Early on, two pull requests were stacked on other
   slice branches. They merged into those branches, not into `main`, so the published
   site did not get them. Pull request #6 fixed this.
