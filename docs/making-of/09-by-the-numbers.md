@@ -6,9 +6,9 @@
 
 | Part | From | To |
 |---|---|---|
-| Brainstorm and project creation | 10 Oct 2026 | 11 Oct 2026 |
-| Unreal Engine game | 11 Oct 2026 | 14 Oct 2026 (the session stayed open until 16 Oct) |
-| Web port | 14 Oct 2026 | 17 Oct 2026 |
+| Brainstorm and project creation | Day 1 | Day 2 |
+| Unreal Engine game | Day 2 | Day 5 (the session stayed open until day 7) |
+| Web port | Day 5 | Day 8 |
 | The whole project | | about 6.8 days |
 
 ## Model and plan
@@ -20,7 +20,7 @@
 ## Tokens
 
 The numbers come from the Claude Code session logs, with each message counted once.
-The web port numbers are from 17 October 2026, 14:19 UTC, after the last slice.
+The web port numbers are from the end of day 8, after the last slice.
 
 | Part | Sessions | Agent transcripts | Messages | Input | Output | Cache write (5 min / 1 h) | Cache read |
 |---|---|---|---|---|---|---|---|

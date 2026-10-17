@@ -4,8 +4,8 @@
 
 ## Why the browser
 
-The Unreal game ran well, but only as a large packaged build on Linux. On 14 October
-2026 the developer decided to make a version that anybody can play in a browser, free
+The Unreal game ran well, but only as a large packaged build on Linux. On day 5 the
+developer decided to make a version that anybody can play in a browser, free
 and open source. These decisions came first:
 
 - **A separate project.** All web work happens in this repository. The Unreal project
@@ -58,28 +58,28 @@ less than 30 MB before the first stage can start.
 The port used the same method as the Unreal game: one vertical slice at a time. Each
 slice ended with a build, a check and a pull request.
 
-| Slice | Pull request | Merged | Result |
+| Slice | Pull request | Day | Result |
 |---|---|---|---|
-| Pages | #1 | 15 Oct | Vite scaffold, a placeholder page and the deploy workflow |
-| 1. Skeleton | #2 | 15 Oct | Data loader, test strip, one car, chase camera, frame-time HUD |
-| 2. Vehicle core | #3 | 15 Oct | Raycast vehicle on Rapier, controls, headless handling tests |
-| 3. Arcade layers | #4 | 15 Oct | The assists from the original. All 221 handling checks pass. |
-| 4. finland | #5, #6 | 15 Oct | The first real stage, drivable from start to finish, and an autopilot |
-| 5. The look | #7 | 15 Oct | Materials, five conditions, height fog, post-processing |
-| Performance | #8 | 16 Oct | 60 fps on an integrated GPU |
-| 6. Effects and audio | #9 | 16 Oct | Dust, skid marks, spectators, breakables, engine and world sound, music |
-| Handling 2 | #11 | 16 Oct | Slides lose speed as in the original; rocks are solid |
-| Audio fixes | #12, #13 | 16 Oct | The listener on the car; louder crowds |
-| Damage and HUD | #14 | 16 Oct | Damage from physics impulses; the full in-stage HUD |
-| Documentation | #15 | 17 Oct | The making-of, the technical reference and a shorter README |
-| 7. All stages | #16 | 17 Oct | Six stages, both directions, all five cars |
-| Skid marks | #17, #18 | 17 Oct | Darker skid marks on gravel and dirt, after a playtest |
-| 8. Weather | #19 | 17 Oct | Rain and snow: grip, look, particles and sound |
-| 9. Game flow | #20 | 17 Oct | Menus, garage, stage select, pause, results, settings and saves |
-| 10. Career and ghosts | #21 | 17 Oct | Four seasons against nine rivals, the best-run ghost and the rival ghosts |
-| 11. Polish | #22 | 17 Oct | No white flash, cache busting, smaller downloads, look fixes, browser checks |
+| Pages | #1 | Day 6 | Vite scaffold, a placeholder page and the deploy workflow |
+| 1. Skeleton | #2 | Day 6 | Data loader, test strip, one car, chase camera, frame-time HUD |
+| 2. Vehicle core | #3 | Day 6 | Raycast vehicle on Rapier, controls, headless handling tests |
+| 3. Arcade layers | #4 | Day 6 | The assists from the original. All 221 handling checks pass. |
+| 4. finland | #5, #6 | Day 6 | The first real stage, drivable from start to finish, and an autopilot |
+| 5. The look | #7 | Day 6 | Materials, five conditions, height fog, post-processing |
+| Performance | #8 | Day 7 | 60 fps on an integrated GPU |
+| 6. Effects and audio | #9 | Day 7 | Dust, skid marks, spectators, breakables, engine and world sound, music |
+| Handling 2 | #11 | Day 7 | Slides lose speed as in the original; rocks are solid |
+| Audio fixes | #12, #13 | Day 7 | The listener on the car; louder crowds |
+| Damage and HUD | #14 | Day 7 | Damage from physics impulses; the full in-stage HUD |
+| Documentation | #15 | Day 8 | The making-of, the technical reference and a shorter README |
+| 7. All stages | #16 | Day 8 | Six stages, both directions, all five cars |
+| Skid marks | #17, #18 | Day 8 | Darker skid marks on gravel and dirt, after a playtest |
+| 8. Weather | #19 | Day 8 | Rain and snow: grip, look, particles and sound |
+| 9. Game flow | #20 | Day 8 | Menus, garage, stage select, pause, results, settings and saves |
+| 10. Career and ghosts | #21 | Day 8 | Four seasons against nine rivals, the best-run ghost and the rival ghosts |
+| 11. Polish | #22 | Day 8 | No white flash, cache busting, smaller downloads, look fixes, browser checks |
 
-The dates are in UTC. The [hard problems chapter](07-hard-problems.md) tells what went
+Day 1 is the day of the first brainstorm. The [hard problems chapter](07-hard-problems.md) tells what went
 wrong in these slices.
 
 ## The result

@@ -4,7 +4,7 @@
 
 ## A video and a question
 
-On 10 October 2026, the developer saw a video. In the video, Claude Code made a game
+On day 1, the developer saw a video. In the video, Claude Code made a game
 with Unreal Engine 5 and Blender. It used no plugins: it found the two applications on
 the disk and controlled them from the command line. The developer wanted to know if
 the same method could make a good game on Linux.
@@ -19,7 +19,7 @@ with Claude Code. Before the first line of code, they agreed on these items:
 ## The inspiration: art of rally
 
 The developer chose a rally game. His model was
-[art of rally](https://artofrally.com/), a stylised top-down rally game. On 11 October
+[art of rally](https://artofrally.com/), a stylised top-down rally game. On day 2
 he asked for a game "as close to the original as possible". It must have at least two
 tracks, the different car types and a playable run-through.
 

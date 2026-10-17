@@ -8,9 +8,9 @@ it. One developer gave the ideas, made the decisions and played each build. The 
 had two parts:
 
 1. **An Unreal Engine 5 game** for the desktop, in C++ and Python, with assets from
-   Blender scripts. It took about four days, from 11 to 14 October 2026.
+   Blender scripts. It took about four days, from day 2 to day 5.
 2. **A web version** of the same game, in TypeScript with three.js and Rapier. It
-   took about three days, from 14 to 17 October 2026, in eleven slices.
+   took about three days, from day 5 to day 8, in eleven slices.
 
 Claude Code used one model, **Claude Opus 5.5**, for all the work, on a **Max 20x**
 plan. The [numbers chapter](09-by-the-numbers.md) gives the tokens and the cost.

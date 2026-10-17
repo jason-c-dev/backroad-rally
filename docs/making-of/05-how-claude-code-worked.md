@@ -71,18 +71,18 @@ wrote a progress note. The next morning the agent continued from that note.
 The agents made small decisions themselves and wrote them in their reports. The
 developer made the large decisions. Some examples from the web port:
 
-| Date | Question | Decision |
+| Day | Question | Decision |
 |---|---|---|
-| 14 Oct | Where and how to publish | A public repository on GitHub Pages, MIT licence, a non-commercial demo |
-| 15 Oct | Must the web game match the Unreal game, or can it differ? | "Match UE." Bushes break, but rocks and trees are solid. Slides must lose speed as in the original. |
-| 16 Oct | Damage and HUD before or after the other stages? | Before. A damage and HUD slice came before all the stages. |
-| 16 Oct | The crowds react but make no sound | A bug: the audio listener was on the camera, not on the car. Fixed in #12. |
-| 16 Oct | The crowds are "a little quiet" | The crowd volume group went from 0.8 to 1.4, about +5 dB (#13) |
-| 16 Oct | Night music | Keep the calm night playlist, as in the original |
-| 16 Oct | Skid marks on gravel look light orange | Make them darker: about `#2E2620` at 0.7 opacity, not `#6A4E34` at 0.6 (queued) |
-| 16 Oct | The documentation | Name art of rally as the inspiration, with a link. Publish the model, the plan, the tokens and the cost. |
-| 16 Oct | A white flash on the page every few loads | Caused by auto quality: it stopped with the quality set to high. Fixed in the polish slice (#22). |
-| 17 Oct | Finish the plan overnight | The orchestrator does slices 8 to 11 without the developer, and "you can merge as we go in future, so avoid conflicts later". |
+| Day 5 | Where and how to publish | A public repository on GitHub Pages, MIT licence, a non-commercial demo |
+| Day 6 | Must the web game match the Unreal game, or can it differ? | "Match UE." Bushes break, but rocks and trees are solid. Slides must lose speed as in the original. |
+| Day 7 | Damage and HUD before or after the other stages? | Before. A damage and HUD slice came before all the stages. |
+| Day 7 | The crowds react but make no sound | A bug: the audio listener was on the camera, not on the car. Fixed in #12. |
+| Day 7 | The crowds are "a little quiet" | The crowd volume group went from 0.8 to 1.4, about +5 dB (#13) |
+| Day 7 | Night music | Keep the calm night playlist, as in the original |
+| Day 7 | Skid marks on gravel look light orange | Make them darker: about `#2E2620` at 0.7 opacity, not `#6A4E34` at 0.6 (queued) |
+| Day 7 | The documentation | Name art of rally as the inspiration, with a link. Publish the model, the plan, the tokens and the cost. |
+| Day 7 | A white flash on the page every few loads | Caused by auto quality: it stopped with the quality set to high. Fixed in the polish slice (#22). |
+| Day 8 | Finish the plan overnight | The orchestrator does slices 8 to 11 without the developer, and "you can merge as we go in future, so avoid conflicts later". |
 
 In the Unreal game, the developer once asked for upscaler options to stop a stutter.
 The agent found the real cause first, which was uneven frame pacing. The developer

@@ -3,7 +3,7 @@
 [Index](README.md) · Previous: [The tools](02-the-tools.md) · Next: [The port to the web](04-the-web-port.md)
 
 The first version of the game was a desktop game in Unreal Engine 5.8.3. Claude Code
-made it in about four days, from 11 to 14 October 2026. The developer was away for long
+made it in about four days, from day 2 to day 5. The developer was away for long
 periods and slept at night, while the agents continued.
 
 ## Three documents first
@@ -29,17 +29,17 @@ editor, the build script needs the editor closed, and Linux has no Live Coding. 
 
 ## The phases
 
-| Phase | Date | Agents | Result |
+| Phase | Day | Agents | Result |
 |---|---|---|---|
-| 1. Foundations | 11 Oct | cars, vegetation, props, stages, audio, core-1 | 5 cars, about 70 trees, plants and props, the finland and japan layouts, the first sounds, a drivable car on a test track |
-| 2. One stage end to end | 11 Oct | core-2, core-3, core-4 | The stage runtime, materials, the look for 5 times of day, dust, skid marks, damage, crowds |
-| 3. The game | 11 Oct | core-5, verify | Career, quick stage, time attack, menus, saves, settings, a packaged Linux build |
-| After playtest 1 | 11 Oct | feel-1, music-2 | Better dry-road handling, new music |
-| 4. Excitement and control | 11 Oct | audio-3, core-6 | Energetic stage music, crowd reactions, a new handbrake |
-| 5. Weather | 11 Oct | core-7 | Clear, rain and snow, with grip, looks and sound for each |
-| 6. Four new stages | 11–12 Oct | stages-2, veg-3, props-2, audio-4, core-8, verify-2 | alps, wales, arizona and vermont |
-| 7. Polish | 12 Oct | core-9, stages-3, perf-1, core-10, verify-3 | A new HUD, a ghost of the best run, smooth frame pacing |
-| 8. Playtest-4 polish | 13–14 Oct | core-11 to core-15 | Engine sound, rival ghosts, power oversteer, a traction assist, longer draw distance |
+| 1. Foundations | Day 2 | cars, vegetation, props, stages, audio, core-1 | 5 cars, about 70 trees, plants and props, the finland and japan layouts, the first sounds, a drivable car on a test track |
+| 2. One stage end to end | Day 2 | core-2, core-3, core-4 | The stage runtime, materials, the look for 5 times of day, dust, skid marks, damage, crowds |
+| 3. The game | Day 2 | core-5, verify | Career, quick stage, time attack, menus, saves, settings, a packaged Linux build |
+| After playtest 1 | Day 2 | feel-1, music-2 | Better dry-road handling, new music |
+| 4. Excitement and control | Day 2 | audio-3, core-6 | Energetic stage music, crowd reactions, a new handbrake |
+| 5. Weather | Day 2 | core-7 | Clear, rain and snow, with grip, looks and sound for each |
+| 6. Four new stages | Days 2–3 | stages-2, veg-3, props-2, audio-4, core-8, verify-2 | alps, wales, arizona and vermont |
+| 7. Polish | Day 3 | core-9, stages-3, perf-1, core-10, verify-3 | A new HUD, a ghost of the best run, smooth frame pacing |
+| 8. Playtest-4 polish | Days 4–5 | core-11 to core-15 | Engine sound, rival ghosts, power oversteer, a traction assist, longer draw distance |
 
 In total, about 37 agent runs came from 33 briefs. The project had 95 commits, about
 920 Unreal assets and about 2.6 GB of binary files in Git LFS.
@@ -91,7 +91,7 @@ without the developer:
 
 ## The handoff
 
-On 14 October the developer decided to make a web version. The main session wrote a
+On day 5 the developer decided to make a web version. The main session wrote a
 handoff document of about 7,800 words for it. It listed what carries over unchanged:
 
 - the design and the tuning decisions from five playtests;

@@ -37,7 +37,7 @@ After the six stages (slice 7), four more slices made the full game.
 
 ## What is not the same as the Unreal game
 
-This list gives the known differences on 17 October 2026.
+This list gives the known differences at the end of the web port.
 
 ### Content
 
