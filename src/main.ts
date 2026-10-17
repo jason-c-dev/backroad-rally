@@ -51,7 +51,7 @@ import { FrameLimiter, buildRoadMarks, createRenderer, dofOptions, gpuName, look
 import { pageKind, parsePlay, putMenuState, type PlaySetup } from './menu/nav';
 import { careerRules, loadMenuData, stageMeta } from './menu/data';
 import { careerLine, loadingCard, menuHref } from './menu/menu';
-import { nextPaint } from './menu/busy';
+import { GETTING_READY, nextPaint } from './menu/busy';
 import { playQuery } from './menu/nav';
 import { StageMenus, type ResultsInfo } from './menu/stageMenus';
 import type { SettingsHost } from './menu/settingsPanel';
@@ -570,7 +570,7 @@ async function runStage(play: PlaySetup | null) {
   rivals?.beginRun();
   // --- /ghosts ---
   // the shaders build next, a second or more with the main thread busy: the indicator says so first
-  menus.setBusy('preparing graphics');
+  menus.setBusy(GETTING_READY);
   await nextPaint();
   // place the camera, then build every pipeline now rather than mid-run (the loading curtain covers this)
   chase.update(0, { position: sim.renderPos, forward: new THREE.Vector3(1, 0, 0).applyQuaternion(sim.renderRot), velocity: vehicle.velocity });
