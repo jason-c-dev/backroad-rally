@@ -91,6 +91,12 @@ body { font-family: system-ui, sans-serif; }
 #stage-hud .hud-results .item.sel { background: #26262b; color: #fff; }
 #stage-hud .hud-results .key { font-size: calc(var(--df) * 15); opacity: 0.6; }
 #stage-hud .hud-dip { position: absolute; inset: 0; background: #fff; opacity: 0; }
+/* rival ghost name labels (the original's SRallyGhostLabels): a tint dot with a dark rim, then the name; placed per frame */
+#stage-hud .ghost-labels { position: absolute; inset: 0; }
+#stage-hud .ghost-label { position: absolute; left: 0; top: 0; display: flex; align-items: center; white-space: nowrap; font-size: calc(var(--uf) * 13);
+  font-weight: 500; will-change: transform; }
+#stage-hud .ghost-label .dot { width: calc(var(--u) * 6); height: calc(var(--u) * 6); margin-right: calc(var(--u) * 5); box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45); }
+#stage-hud.panel-open .ghost-labels { visibility: hidden; }
 /* a results panel hides the driving instruments, as in the original */
 #stage-hud.panel-open .hud-timer, #stage-hud.panel-open .hud-lights, #stage-hud.panel-open .hud-gear, #stage-hud.panel-open .hud-speed,
 #stage-hud.panel-open .hud-progress { visibility: hidden; }

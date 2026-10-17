@@ -4,12 +4,13 @@
 //
 //   menu   no stage options in the URL (the default page load), or ?menu=<screen>
 //   play   ?mode=quick|attack&stage=..&dir=..&car=..&livery=..&cond=..&weather=..   (from the stage select)
+//          ?mode=career&...: the career's next stage (the stage page takes the stage from the save's career)
 //   dev    ?stage=, ?car= or ?autopilot= without ?mode: straight into the stage, as before the menus
 //
 // What the menus need across a page load (the screen to open, the picks, the music track) goes in
 // sessionStorage, never in the save.
 
-export type PlayMode = 'quick' | 'attack';
+export type PlayMode = 'quick' | 'attack' | 'career';
 
 export interface PlaySetup {
   mode: PlayMode;
@@ -23,13 +24,18 @@ export interface PlaySetup {
 }
 
 /** Development and check options kept when the page moves between the menus and a stage. */
-const STICKY = ['webgl', 'gputime', 'audio', 'quality', 'scale', 'upscale', 'post', 'fx', 'crowd', 'draw', 'unlockall', 'fps'];
+const STICKY = ['webgl', 'gputime', 'audio', 'quality', 'scale', 'upscale', 'post', 'fx', 'crowd', 'draw', 'unlockall', 'fps', 'rivals'];
+/** Kept too with ?autocontinue (headless career runs, tools/check/career.mjs: the robot drives every stage). */
+const STICKY_AUTO = ['autocontinue', 'autopilot', 'minturn', 'timescale'];
+/** Sticky options that would make a page without ?mode a development stage: the menus' URL says ?menu then. */
+const DEV_KEYS = ['autopilot'];
 
 export type PageKind = 'menu' | 'play' | 'dev';
 
 export function pageKind(p: URLSearchParams): PageKind {
   if (p.has('menu')) return 'menu';
-  if (p.get('mode') === 'quick' || p.get('mode') === 'attack') return 'play';
+  const m = p.get('mode');
+  if (m === 'quick' || m === 'attack' || m === 'career') return 'play';
   if (p.has('stage') || p.has('car') || p.has('autopilot') || p.has('dir')) return 'dev';
   return 'menu';
 }
@@ -39,7 +45,7 @@ const ID = /^[a-z]{1,20}$/;
 /** The run a ?mode= page drives (null when the URL isn't one). */
 export function parsePlay(p: URLSearchParams): PlaySetup | null {
   const mode = p.get('mode');
-  if (mode !== 'quick' && mode !== 'attack') return null;
+  if (mode !== 'quick' && mode !== 'attack' && mode !== 'career') return null;
   const stage = p.get('stage') ?? 'finland';
   const car = p.get('car') ?? 'swift';
   return {
@@ -55,7 +61,7 @@ export function parsePlay(p: URLSearchParams): PlaySetup | null {
 
 function sticky(from: URLSearchParams): URLSearchParams {
   const q = new URLSearchParams();
-  for (const k of STICKY) {
+  for (const k of from.has('autocontinue') ? [...STICKY, ...STICKY_AUTO] : STICKY) {
     const v = from.get(k);
     if (v !== null) q.set(k, v);
   }
@@ -76,7 +82,9 @@ export function playQuery(s: PlaySetup, from: URLSearchParams = new URLSearchPar
 
 /** The query of the menus ('' when no option is kept). */
 export function menuQuery(from: URLSearchParams = new URLSearchParams()): string {
-  const q = sticky(from).toString();
+  const st = sticky(from);
+  if (DEV_KEYS.some((k) => st.has(k))) st.set('menu', '1');
+  const q = st.toString();
   return q ? `?${q}` : '';
 }
 
@@ -96,6 +104,8 @@ export interface MenuState {
   settingsReturn?: string;
   /** Focused row index on the screen (a backdrop swap reloads the page mid-scroll). */
   focus?: number;
+  /** Career: the screens still to show after a rally (rally results, standings, the unlock card). */
+  pending?: string[];
 }
 
 const KEY = 'backroad-rally.nav';

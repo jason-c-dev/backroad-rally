@@ -100,9 +100,12 @@ export function settingsScreen(menu: MenuController, host: SettingsHost, onClose
       g.ghost = !g.ghost;
       host.applyGame();
     } });
-    // slice 10 draws the rival ghosts: the row shows the default and can't change yet
-    opt({ text: 'rival ghosts', value: () => (g.rivalGhosts <= 0 ? 'off' : g.rivalGhosts >= 99 ? 'all' : '3'), badge: () => 'soon',
-      disabled: () => true, onAdjust: () => {} });
+    // rival ghosts: off / 3 / all (quick stage and time attack; the career races all of them unless off)
+    opt({ text: 'rival ghosts', value: () => (g.rivalGhosts <= 0 ? 'off' : g.rivalGhosts >= 99 ? 'all' : '3'), onAdjust: (dir) => {
+      const v = [0, 3, 99];
+      g.rivalGhosts = v[(v.indexOf(g.rivalGhosts) + (dir < 0 ? 2 : 1)) % 3];
+      host.applyGame();
+    } });
     item('display & graphics  ›', () => go('display'));
     item('reset to defaults', () => {
       Object.assign(g, GAME_DEFAULTS);
@@ -113,7 +116,7 @@ export function settingsScreen(menu: MenuController, host: SettingsHost, onClose
       host.applyHud();
     }, 18);
     item('back', onClose);
-    hint = 'left / right or click ‹ › to change  ·  changes apply at once\ntraction assist: on tames wheelspin at speed, off lets the tail slide\nrival ghosts come with the career (slice 10)';
+    hint = 'left / right or click ‹ › to change  ·  changes apply at once\ntraction assist: on tames wheelspin at speed, off lets the tail slide\nrival ghosts: the career races all of them unless off; quick stage the 3 nearest your best';
   } else if (page === 'sound') {
     for (const [name, key] of SOUND_ROWS) {
       opt({ text: name, value: () => pct(key === 'master' ? v.master : v.groups[key]), onAdjust: (dir) => {

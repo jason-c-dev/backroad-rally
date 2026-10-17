@@ -76,10 +76,15 @@ options.
 
 **Now in the game:**
 
+- **Career:** four seasons from the 1960s to the 1990s, four rallies of two stages each,
+  against nine rivals. Points, standings, restarts, damage that stays between the stages
+  of a rally, and new groups, cars and bonus liveries to unlock.
+- **Ghosts:** race the ghost of your best run, with the time gap on the HUD, and the rival
+  ghosts with their names and your live position.
 - **Menus:** a title screen over a live diorama, a garage with the spec sheet of each car,
   a stage select with the time of day, the weather and your best time, pause, results and
-  settings (assists, camera, every volume, graphics quality, frame-rate limit). Best times
-  stay in your browser.
+  settings (assists, camera, every volume, graphics quality, frame-rate limit). Best times,
+  ghosts and the career stay in your browser.
 - **Six stages:** finland, japan, alps, wales, arizona and vermont, about
   3 km each, with jumps, bridges, a ford, a canyon and crowds. Each runs forward or in reverse.
 - **Five cars:** swift and pip (1960s, rear-wheel and front-wheel drive), lama

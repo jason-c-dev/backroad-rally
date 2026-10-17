@@ -220,6 +220,18 @@ export class Damage {
     }
   }
 
+  /**
+   * Career: the damage carried from the rally's previous stage (UE AddDamage + SetParts), set quietly (no hit
+   * event, no sound). Without parts it spreads evenly. Not terminal: the carry is capped at 0.99.
+   */
+  carry(value: number, parts: readonly number[] = []): void {
+    this.value = Math.min(Math.max(value, 0), 0.99);
+    this.terminal = false;
+    if (parts.length === this.parts.length) this.parts.forEach((_, i) => (this.parts[i] = Math.min(Math.max(parts[i], 0), 1)));
+    else this.parts.fill(Math.min(1, this.value * this.cfg.parts.gain));
+    this.lastChange = -100;
+  }
+
   /** Back to new (stage restart). */
   repair(): void {
     this.value = 0;

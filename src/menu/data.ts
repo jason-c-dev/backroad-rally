@@ -3,6 +3,7 @@
 import { load, loadCar, type CarData, type Livery } from '../data';
 import type { ConditionsJson } from '../look/conditions';
 import type { WeatherJson } from '../game/weather';
+import { CareerRules, type CareerJson } from '../game/career';
 
 export interface MenuStage {
   id: string;
@@ -61,11 +62,7 @@ export interface GarageCar {
   bio: string;
 }
 
-export interface CareerJson {
-  start_groups: string[];
-  start_cars: string[];
-  seasons: { group: string; name: string; cars: string[]; unlock_group: string; unlock_cars: string[] }[];
-}
+export type { CareerJson };
 
 export type CarInfo = CarData & { liveries: (Livery & { bonus?: boolean })[] };
 
@@ -128,6 +125,13 @@ export function lockLine(d: MenuData, car: string, carLocked: boolean): string {
   if (!carLocked) return 'locked livery: a career podium with this car\'s group unlocks it.';
   const season = d.career.seasons.find((s) => s.unlock_cars.includes(car));
   return `locked: finish ${season ? `the ${groupName(d, season.group)} season` : 'an earlier season'} of the career to unlock it.`;
+}
+
+/** The career's rules over career.json and the menus' stages, cars and groups (src/game/career.ts). */
+export function careerRules(d: MenuData): CareerRules {
+  return new CareerRules(d.career, {
+    stages: d.menu.stages, cars: d.cars, groups: d.menu.groups, defaultWeather: (stage, reverse) => stageWeather(d, stage, reverse),
+  });
 }
 
 /** Spec sheet of a car (garage.json). */
