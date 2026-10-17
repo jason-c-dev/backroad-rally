@@ -8,7 +8,7 @@
 
 > [!TIP]
 > **Notice a bug, or would like to see something more in the game?** Please
-> [raise an issue](https://github.com/jason-c-dev/backroad-rally/issues/new). Claude will consider all requests. :)
+> [raise an issue](https://github.com/jason-c-dev/backroad-rally/issues/new). Claude will consider all requests. <img src="docs/images/claude-code.gif" alt="Claude" height="20" align="top">
 
 [![Play](https://img.shields.io/badge/play-in_browser-2ea44f?logo=googlechrome&logoColor=white)](https://jason-c-dev.github.io/backroad-rally/)
 [![Pages deploy](https://img.shields.io/github/actions/workflow/status/jason-c-dev/backroad-rally/pages.yml?branch=main&label=pages&logo=github)](https://github.com/jason-c-dev/backroad-rally/actions/workflows/pages.yml)
