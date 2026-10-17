@@ -145,8 +145,9 @@ tiers, effects, damage, HUD, audio, tests, asset conversion and browser checks.
 
 ## Credits
 
-- Inspired by [art of rally](https://artofrally.com/). This project has no connection
-  with its makers.
+- Inspired by [art of rally](https://artofrally.com/) by Funselektor Labs. This project has no
+  connection with its makers and received no sponsorship from them. I bought the game
+  myself, and I am a huge fan of Funselektor's work.
 - Rendering: [three.js](https://threejs.org/) (MIT).
 - Physics: [Rapier](https://rapier.rs/) (Apache-2.0).
 - Sound effects and music generated with [ElevenLabs](https://elevenlabs.io/).
