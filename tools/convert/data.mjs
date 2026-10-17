@@ -42,10 +42,11 @@ const FILES = [
 const OVERRIDES = {
   'cars/kaze.json': { 'liveries.1.name': 'rally white' },
   // Skid marks on gravel and dirt: the original's mid browns read as light orange on the lit
-  // road; darker on playtest (2026-10-16).
+  // road; darker on playtest (2026-10-16). A mark's opacity is this × 0.55-1 by slide strength,
+  // so a light slide at 0.7 still read brown: near-black at 0.9.
   'fx.json': {
-    'skid.surfaces.gravel': { color: '#2E2620', opacity: 0.7 },
-    'skid.surfaces.dirt': { color: '#2A221C', opacity: 0.65 },
+    'skid.surfaces.gravel': { color: '#1A1612', opacity: 0.9 },
+    'skid.surfaces.dirt': { color: '#1A1612', opacity: 0.85 },
   },
 };
 
