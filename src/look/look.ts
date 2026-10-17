@@ -50,6 +50,17 @@ const WEATHER_CALIB: Record<string, Record<string, WeatherCalib>> = {
   },
 };
 /** Dev: ?wcal=exposure,sky,grey overrides the weather calibration (fitting it against screenshots). */
+/**
+ * Per-stage sky fill on top of the rest: the original's global illumination bounced light from sunlit rock into the
+ * shade, which a hemisphere light can't. Arizona's canyon walls and the road under them came out at about a third
+ * of the original's brightness in shade (sampled at the same spot, s 1983): a stronger sky light, and a warm red
+ * ground colour for faces that look down or sideways (the bounce off the canyon). ?stagesky=sky,groundR,groundG,groundB
+ * overrides it for tuning.
+ */
+const STAGE_SKY: Record<string, { sky: number; ground?: [number, number, number] }> = {
+  arizona: { sky: 2.2, ground: [0.55, 0.18, 0.08] },
+};
+const SSKY = typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('stagesky')?.split(',').map(Number) ?? null;
 const WCAL = typeof location === 'undefined' ? null : new URLSearchParams(location.search).get('wcal')?.split(',').map(Number) ?? null;
 /** Shadow cascades: split depths (m from the camera) for the high chase camera, which sees ground from ~28 m. */
 const CASCADES = [52, 85, 160];
@@ -218,7 +229,12 @@ export class Look {
       const sl = 0.2126 * this.sky.color.r + 0.7152 * this.sky.color.g + 0.0722 * this.sky.color.b;
       this.sky.color.lerp(new THREE.Color(sl, sl, sl), wc.skyGrey);
     }
-    this.sky.intensity = c.sky.intensity * this.calib.sky * cc.sky * wc.sky;
+    const st = SSKY ? { sky: SSKY[0] ?? 1, ground: SSKY.length >= 4 ? [SSKY[1], SSKY[2], SSKY[3]] as [number, number, number] : undefined }
+      : STAGE_SKY[this.opts.stage];
+    // (rain and snow keep their own fitted sky: the bounce is a sunlit-rock effect)
+    const sunny = (!this.opts.weather || this.opts.weather.name === 'clear') && name !== 'night';
+    if (st?.ground && sunny) this.sky.groundColor.setRGB(st.ground[0], st.ground[1], st.ground[2]).multiply(c.sky.color);
+    this.sky.intensity = c.sky.intensity * this.calib.sky * cc.sky * wc.sky * (st && sunny ? st.sky : 1);
     // shared material uniforms
     U.nightGlow.value = c.mpc.nightGlow;
     U.wind.value = c.mpc.wind;

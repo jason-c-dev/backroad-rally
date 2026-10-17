@@ -13,6 +13,9 @@
 html, body { margin: 0; height: 100%; overflow: hidden; background: var(--m-curtain); color: var(--ink); }
 body { font-family: system-ui, sans-serif; }
 #app, #app canvas { display: block; width: 100%; height: 100%; }
+/* behind the game's canvas: dark, so a frame the canvas shows empty (a resize clears it) reads as a dark blink at
+   worst, never as a flash of the light page; the stage draws over it in the same frame anyway (src/main.ts) */
+#app canvas { background: #1b1916; }
 #frame-hud, #fatal {
   position: fixed; top: 8px; left: 8px; margin: 0; padding: 4px 8px;
   background: var(--panel); border-radius: 4px; white-space: pre;
@@ -153,6 +156,8 @@ body.no-hud #frame-hud, body.no-hud #stage-hud { display: none; }
 .menu-root .table .trow.hi { background: var(--m-ink); color: rgba(var(--m-paper), 0.92); font-weight: 600; }
 .menu-root .table .cell { flex: none; white-space: nowrap; }
 .menu-root .table .cell.right { text-align: right; font-variant-numeric: tabular-nums; font-feature-settings: 'tnum' 1; }
+/* two right-aligned number columns side by side (stage, gap): a gutter, or a long gap ran into the stage time */
+.menu-root .table .cell.right + .cell.right { padding-left: calc(var(--d) * 18); }
 .menu-root .controls .crow { display: flex; padding: calc(var(--d) * 1) 0; }
 .menu-root .controls.centre .crow { justify-content: center; }
 .menu-root .controls .act { text-align: right; font-weight: 500; }

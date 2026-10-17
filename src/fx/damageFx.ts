@@ -10,6 +10,8 @@ import { hexLinear, hexList, lerp, type FxJson, type Rng } from './config';
 import type { Pool } from './pool';
 
 const CM = 0.01;
+/** The breeze given to damage smoke at birth (m/s, world x and z; the puff's drag slows it, ~1.9 m of drift). */
+const WIND = [2.4, 2.4];
 
 export interface DamageFxConfig {
   smoke_rate_min: number;
@@ -51,6 +53,7 @@ export class DamageFx {
   private at = new THREE.Vector3();
   private u = new THREE.Vector3();
   private c = new THREE.Color();
+  private c2 = new THREE.Color();
 
   constructor(fx: FxJson, carId: string, lengthCm: number, private smoke: Pool, private flame: Pool, private rng: Rng) {
     this.cfg = (fx as unknown as { damage_fx: DamageFxConfig }).damage_fx;
@@ -74,18 +77,23 @@ export class DamageFx {
     const engine = this.at.copy(this.engine).applyQuaternion(rot).add(pos);
     const heavy = Math.min(Math.max((d.value - d.smokeFrom) / Math.max(0.01, 1 - d.smokeFrom), 0), 1);
     this.smokeAcc += lerp(C.smoke_rate_min, C.smoke_rate_max, heavy) * this.scale * dt;
-    const col = this.c.copy(this.light).lerp(this.dark, heavy);
+    const base = this.c.copy(this.light).lerp(this.dark, heavy);
+    const col = this.c2;
     while (this.smokeAcc >= 1) {
       this.smokeAcc -= 1;
+      // each puff a little lighter or darker: from above, a column of same-coloured puffs read as one dark blob
+      col.copy(base).multiplyScalar(rng.range(0.8, 1.25));
       const u = rng.unit(this.u);
       const rise = rng.pick(C.smoke_rise_cms, 120, 220) * CM;
       const sx = rng.range(-1, 1), sz = rng.range(-1, 1);
       const spread = C.smoke_spread_cms * CM;
       this.smoke.emit({
         x: engine.x + u.x * 0.2, y: engine.y + u.y * 0.2, z: engine.z + u.z * 0.2,
-        vx: vel.x * 0.55 + u.x * 0.4 + sx * spread,
+        // + a breeze (port addition, 3.4 m/s at birth, slowed by the drag): a parked car's column, seen from straight above, was one round
+        // blob; drifting, it reads as a plume
+        vx: vel.x * 0.55 + u.x * 0.4 + sx * spread + WIND[0],
         vy: vel.y * 0.55 + rise + u.y * 0.4,
-        vz: vel.z * 0.55 + u.z * 0.4 + sz * spread,
+        vz: vel.z * 0.55 + u.z * 0.4 + sz * spread + WIND[1],
         life: rng.pick(C.smoke_life_s, 1.8, 3.2),
         size0: lerp(30, 60, heavy) * CM,
         size1: lerp(140, 300, heavy) * rng.range(0.8, 1.2) * CM,
@@ -94,7 +102,8 @@ export class DamageFx {
         drag: 1.8,
         gravity: 0,
         spin: rng.range(-60, 60),
-        fadeIn: 0.1,
+        // thin while it is still over the engine (the flames show), dense once it has risen and drifted
+        fadeIn: 0.3,
         fadeOutStart: 0.4,
       });
       this.smokeEmitted++;

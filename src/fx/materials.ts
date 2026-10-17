@@ -130,10 +130,13 @@ export function solidMaterial(cheap: boolean): THREE.NodeMaterial {
   return m;
 }
 
-/** Flames and sparks: the colour × the emissive (20-40), faded by a dither. */
-export function glowMaterial(): THREE.MeshBasicNodeMaterial {
-  const m = new THREE.MeshBasicNodeMaterial();
-  m.name = 'FxGlow';
+/**
+ * Flames and sparks: the colour × the emissive (20-40), faded by a dither. `overSmoke`: drawn in the blended queue
+ * (still dithered, fully opaque where drawn), so a flame shows through the damage smoke that didn't write depth.
+ */
+export function glowMaterial(overSmoke = false): THREE.MeshBasicNodeMaterial {
+  const m = new THREE.MeshBasicNodeMaterial(overSmoke ? { transparent: true } : {});
+  m.name = overSmoke ? 'FxGlowOver' : 'FxGlow';
   m.positionNode = placed();
   const c = fxC();
   m.colorNode = c.rgb.mul((fxU.light as unknown as V3).add(emissiveTerm(0.12)));

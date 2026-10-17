@@ -101,6 +101,25 @@ const sway = (p: V3): V3 => {
   return vec3(s1.mul(0.85).add(s2.mul(0.25)), 0, s2.mul(0.55).sub(s1.mul(0.2))).mul(w) as V3;
 };
 
+/**
+ * A grazing animal (UE AStageActor::UpdateIdlers): a slow nod, head down and back up (pitch about the mesh origin,
+ * graze = max(0, sin(phase))), a little side-to-side yaw and a breathing bob; phase and rate from the instance
+ * position (the original drew them from its random stream). Local space: x forward, y up, z right.
+ */
+const grazed = (local: V3): V3 => {
+  const ip = instA().xyz;
+  const h = fract(sin(dot(vec2(ip.x, ip.z), vec2(12.9898, 78.233))).mul(43758.5453));
+  const hz = mix(U.idle.z, U.idle.w, fract(h.mul(7.13)));
+  const ph = time.mul(hz).mul(6.2831853).add(h.mul(6.2831853));
+  const graze = max(sin(ph), 0);
+  const pitch = U.idle.x.mul(graze).negate(); // nose down
+  const yaw = U.idle.x.mul(0.4).mul(sin(ph.mul(0.5)));
+  const cp = cos(pitch), sp = sin(pitch);
+  // pitch about z (x toward -y for a negative angle), then the small yaw about y
+  const v = vec3(local.x.mul(cp).sub(local.y.mul(sp)), local.x.mul(sp).add(local.y.mul(cp)), local.z);
+  return rotY(v as unknown as V3, yaw).add(vec3(0, U.idle.y.mul(sin(ph.mul(2))).div(instA().w), 0)) as V3;
+};
+
 /** Dither: keep the pixel where the noise is in [lo, hi) (alpha test, never blend). */
 const dithered = (hi: N, lo?: N) => {
   const offset = float(frameId).mod(8).mul(5.588238).mul(U.ditherAnimate);
@@ -312,8 +331,15 @@ export function instanceMaterials(): Record<string, THREE.Material> {
   if (flat.roughnessNode) flatFade.roughnessNode = flat.roughnessNode;
   flatFade.maskNode = OFF.has('occ') ? flat.maskNode : dithered(float(1).sub(occluder(8, 0.85)).mul(fadeBand()[0]), fadeBand()[1]);
   flatFade.maskShadowNode = bool(true);
+  // grazing animals (features.idle): Flat with the nod and bob (shadows follow)
+  const flatIdle = standard('FlatIdle', { roughness: 0.85, flatShading: true });
+  flatIdle.positionNode = placed(grazed(positionLocal as unknown as V3));
+  flatIdle.colorNode = flat.colorNode;
+  if (flat.roughnessNode) flatIdle.roughnessNode = flat.roughnessNode;
+  flatIdle.maskNode = flat.maskNode;
+  flatIdle.maskShadowNode = bool(true);
   const out: Record<string, THREE.Material> = {
-    Flat: flat, FlatFade: flatFade, Foliage: foliage, FoliageFar: far, Glow: g,
+    Flat: flat, FlatFade: flatFade, FlatIdle: flatIdle, Foliage: foliage, FoliageFar: far, Glow: g,
     // diffuse-only foliage for low quality (stage.ts setLod swaps them in)
     FoliageL: lambertCopy(foliage), FoliageFarL: lambertCopy(far),
   };

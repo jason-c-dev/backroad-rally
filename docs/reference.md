@@ -19,6 +19,7 @@ For the story of how the game was made, read [the making-of](making-of/README.md
 - [The look](#the-look)
 - [Weather](#weather)
 - [Quality tiers and performance](#quality-tiers-and-performance)
+- [Browsers](#browsers)
 - [Effects](#effects)
 - [Damage](#damage)
 - [HUD](#hud)
@@ -38,6 +39,44 @@ npm test           # unit tests
 npm run test:handling   # headless handling tests (all cars, both surfaces)
 npm run build      # production build into dist/, served under /backroad-rally/
 ```
+
+### The build and the cache
+
+- **Content hashes.** The build gives each file in `public/` a content hash
+  (`vite.config.ts`) and adds it to each URL that the game fetches at runtime:
+  `data/fx.json?v=422aaad973` (`src/data.ts` `publicUrl`). GitHub Pages lets browsers
+  keep each file for 10 minutes (`max-age=600`). After a deploy, a normal reload gets
+  the new page, the page gets the new bundle, and the bundle asks for each changed file
+  with a new URL. Files that did not change keep their URL and stay in the cache.
+  `tools/check/cachebust.mjs` tests this.
+- **Compressed models.** GitHub Pages compresses text files, but not binary files. The
+  build thus compresses each GLB with gzip to `.glb.gz` (stages −23 to −34%, cars −84%),
+  and the game unpacks it with `DecompressionStream` (`src/data.ts` `loadGlb`).
+- **Chunks.** three.js (290 kB with gzip) and Rapier (1.7 MB with gzip, with its
+  WebAssembly inside) are separate chunks. They change only when a dependency changes, so
+  a deploy of new game code does not download them again.
+- **Prefetch.** When the menus show, the game fetches in the background what a run on the
+  backdrop's stage needs in addition: the effect, damage and HUD data, the rival lines and
+  the car models. The stage files are already in the cache, because the backdrop is that
+  stage. A stage page starts its small data files together with the big ones.
+
+### Load time
+
+Measured with `tools/check/load.mjs` (20 Mbit/s, 20 ms latency, a cold cache, headless
+Chrome on the integrated GPU, `tools/check/serve.mjs`):
+
+| | Before (slice 10) | Now |
+|---|---|---|
+| Title: time | 8.2–8.4 s | 8.1–8.6 s |
+| Title: download | 7.49 MB, 33 requests | 6.43 MB, 35 requests |
+| Quick stage (wales) from the title: curtain up / countdown | 6.5–7.0 s / 9.0–9.5 s | 6.6–7.4 s / 9.1–9.9 s |
+| Quick stage: download | 6.56 MB | 5.41 MB |
+| Again, with the cache: title / stage | 2.9 s / 3.1 s | 3.0 s / 3.2 s |
+| A deploy of new game code: JavaScript to download again | 2.03 MB | 0.10 MB |
+
+The time is mostly not the network: the build of the stage, the warm-up of every shader
+(about 1.1 s) and the auto quality measurement (1.5 to 2.5 s) are behind the curtain. The
+warm-up now draws every mesh of the stage, so that no shader compiles during the run.
 
 ## Menus
 
@@ -256,7 +295,9 @@ change them. They have no collision and no sound, and they cast no shadow.
   rotation, the front-wheel steer and the stage progress.
 - A new best time keeps the run as the ghost for that stage, direction, car and weather.
   The next run races it.
-- The ghost is a light blue (#7FA8E6) see-through car at 0.4 opacity. It fades near your
+- The ghost is a light blue (#7FA8E6) see-through car at 0.4 opacity. Its colours (and
+  the rivals' livery colours) go through the same double sRGB decode as every vertex
+  colour in the look. With one decode, the ghosts were pale and whitish on bright gravel. It fades near your
   car and near the camera, and 0.6 s after its finish. The setting "ghost of best run"
   switches it off.
 - Playback uses Catmull-Rom curves for the position and slerp for the rotation. A jump of
@@ -283,6 +324,9 @@ change them. They have no collision and no sound, and they cast no shadow.
 - **The live position** ("p3 / 10") counts the rivals whose time at your progress is less
   than your time with penalties. It updates five times each second, and a change must hold
   for 0.5 s. At the finish it is the same as the results table.
+- **A restart** in quick stage or time attack picks the rivals again (a new best time
+  changes the picks). The new ghosts load in the background, and the old ones stay on the
+  grid until the new ones are ready.
 - **Which rivals.** The career races all nine, with the times of the results. Quick stage
   and time attack give the rivals times from the targets of your car's group and the
   weather (no crashes). With "3", the two nearest rivals that are faster than your best
@@ -346,6 +390,11 @@ the terrain, its props and plants, the instance table and the road.
 - **Each stage has its own** ambience and music, location sounds near the animals
   (cowbells, sheep), water colour, and light for each time of day. `?cond=stage` selects
   the stage's own time for each direction.
+- **Animals graze.** Cows and sheep (category `animal`, `stage_runtime.json`
+  `features.idle`) nod their head down and back up, turn a little and breathe: a 4° nod
+  and a 1.5 cm bob, one cycle in 3 to 8 s. The vertex shader moves them (the original
+  moved each one on the CPU), so they cost nothing. From the chase camera the movement is
+  small, as in the original.
 - **Instance table.** The table holds each plant and prop as x, y, z, heading, scale and
   tint. The converter quantizes the values to 16 bits (about 5 cm on a 3 km stage) and
   compresses the table with gzip. The browser's `DecompressionStream` unpacks it at load.
@@ -424,6 +473,8 @@ Add the options to the page address, for example `?car=pip&cond=night`.
 | `?crowd=0` | No spectators (to measure their cost) |
 | `?audio=0` | No sound |
 | `?gputime` | Measure the GPU time for each frame with timer queries (for the check scripts) |
+| `?autostart=<rung>` | For checks: start auto quality on this rung of the ladder (0 = high, 5 = low at 55%), not on the remembered or guessed one |
+| `?stagesky=sky,r,g,b`, `?sakura=sat,value`, `?idlenod=<deg>` | For development: tune the stage sky fill, the sakura colour and the nod of the grazing animals (see [The look](#the-look)) |
 | `?webgl` | Use the WebGL2 renderer, not WebGPU |
 | `?autopilot=120` | A robot drives: pure pursuit on the centreline, at 120 km/h maximum. Add `&minturn=0.3`. `&apkeys=1` drives as a good keyboard player (it taps toward the steer that it wants). `&apkeys=2` drives as a heavy-handed player (it holds the key). |
 | `?timescale=4` | Run the game four times faster than the clock (for headless checks) |
@@ -444,11 +495,17 @@ lighting and the colour grade change with the time of day, from
 - Both fades are alpha-tested dithers. They are never blended, and the shadows ignore
   them.
 - Lakes have a lighter shore colour where the water is shallow.
+- The cherry trees on japan get more saturated and darker vertex colours at load
+  (saturation ×2, value ×0.82). Their authored colours are pastel. In the original, most
+  of each canopy was in a deep magenta shade, and with our lighting they were too pale.
 
 ### Lighting
 
 - A sun with three shadow cascades.
-- A hemisphere sky light.
+- A hemisphere sky light. On arizona in clear weather by day, the sky light is 2.2 times
+  stronger and lights from below with a red-brown colour. This copies the bounce light
+  from the sunlit canyon rock in the original. Without it, the shade in the canyon was
+  about a third as bright as in the original.
 - Height fog that follows the car. At sunset the fog glows toward the sun.
 - At night, two headlight spots and lit windows.
 
@@ -605,20 +662,39 @@ material that never discards.
 
 ### Auto quality
 
-Auto quality is the default (`src/look/autoQuality.ts`).
+Auto quality is the default (`src/look/autoQuality.ts`). A change of tier compiles the
+shaders and the shadow maps again. On an integrated GPU, this stops the game for 0.7 to
+1.4 s, also for a tier that the page used before. A change of render scale only resizes
+the canvas. Thus auto quality has two phases.
 
-1. It starts from a guess by GPU and screen size:
-   - a discrete GPU: high, or medium above about 2560 × 1440;
-   - an integrated GPU: low, at 70% render scale on a big screen.
-2. It then moves along a ladder: high, medium, low, then low at 85%, 70% and 55% render
-   scale.
-3. During the first ten seconds, it steps down when a third of a 1.5 s window has frames
-   slower than 20 ms.
-4. After that, it steps down only after two bad 3 s windows in sequence.
-5. It steps up only when the GPU timer shows sufficient headroom for 20 s. It never
-   steps back into a rung that failed.
+1. **Settling, behind the loading curtain.** The player does not see this phase.
+   - The start is the tier that the last visit to the same stage (or the same menu
+     diorama) found, on the same GPU and window size. The game keeps it for one day in
+     `localStorage` (`backroad-rally.autoquality`). Without it, the start is a guess by GPU
+     and screen size: a discrete GPU starts high (medium above about 2560 × 1440), an
+     integrated GPU starts low (at 70% render scale on a big screen).
+   - It measures 1 s windows. It steps down the ladder (high, medium, low, then low at
+     85%, 70% and 55% render scale) when a third of a window is in frames slower than
+     20 ms. It also steps down after two "marginal" windows: more than 10% of the time
+     in slow frames, or, where the browser has a GPU timer, a GPU time (90th percentile)
+     above 75% of the frame interval. The start line is lighter than the stage, so a tier
+     that only just holds there does not hold in the forest.
+   - It has settled after two clean windows in sequence. If the tier changed, the game
+     then draws everything once more (every stage mesh, the effect pools and the ghosts),
+     so that no shader compiles during the run.
+   - The curtain waits for this, for a maximum of 14 s.
+2. **Play, after the curtain starts to lift.** The tier stays the same. Only the render
+   scale changes: it steps down (100%, 85%, 70%, 55%) after two bad 3 s windows in
+   sequence, and it steps up only when the GPU timer shows sufficient headroom for 20 s.
+   It never goes back to a scale that failed.
+
+The game applies a new render scale before it draws the frame. The resize clears the
+canvas, and the frame is drawn into it at once, so the browser never shows an empty
+canvas. Behind the canvas the page is dark (`#1b1916`), not the light colour of the
+menus.
 
 The HUD shows the tier, the scale and `(auto)`. `?quality=<tier>` pins the tier.
+`?autostart=<rung>` starts auto quality on a given rung (0 = high) for checks.
 
 ### Render scale and the GPU
 
@@ -646,6 +722,30 @@ cap. GPU is the timer-query mean / p95 in ms. On an integrated GPU, this value i
 The heaviest parts are the larch forest on alps (s 600–1000) and the sugar-maple tunnel
 on vermont (s 900–1800). Their dense canopies use 14–16 ms of GPU time. On full-stage
 runs, alps dropped 1 frame in total (high), and vermont dropped 7 (integrated GPU).
+
+## Browsers
+
+Tested on 17 October 2026 with `tools/check/browsers.mjs` (the title, then 30 s of a quick
+stage on finland with the autopilot, 1600 × 968, 60 fps cap), on a laptop with an Intel
+integrated GPU and an RTX 5070 Ti laptop GPU:
+
+| Browser | Backend and GPU | Auto quality | Frame rate | Console errors |
+|---|---|---|---|---|
+| Chrome, normal start (Wayland) | WebGL2, integrated GPU | low | 60.0 fps, 0 frames over 25 ms | none |
+| Chrome with WebGPU switched on | WebGPU gave a software adapter (SwiftShader), so the game uses WebGL2, integrated GPU | low | 60.0 fps | none |
+| Chrome on the RTX (X11 client) | WebGPU, discrete GPU | high | 60.0 fps, 0 over 25 ms | none |
+| Chrome on the RTX with `?webgl` | WebGL2, discrete GPU | high | 60.0 fps, 0 over 25 ms | none |
+| Firefox (Playwright build) | WebGL2 (no WebGPU on Linux), integrated GPU | low | 60.0 fps, 4 over 25 ms | none |
+
+- **Chrome on the RTX** starts as an X11 client with the NVIDIA offload variables:
+  `__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia __VK_LAYER_NV_optimus=NVIDIA_only google-chrome-stable --user-data-dir=<a separate profile> --ozone-platform=x11 --use-angle=vulkan --enable-features=Vulkan,VulkanFromANGLE --enable-unsafe-webgpu`.
+- **A software WebGPU adapter** (SwiftShader, or an adapter that says it is a fallback)
+  ran the game at 2 to 6 fps. The game now uses WebGL2 in that case, which gets the
+  hardware.
+- **Firefox's frame clock** varies more from frame to frame. Auto quality judges the mean
+  of each frame and the one before, so a steady 60 fps does not read as missed frames.
+- **Safari** was not tested: it was not available on the test machine. Safari before 18.4
+  has no music (Ogg Opus).
 
 ## Effects
 
@@ -768,15 +868,19 @@ hit of 110 km/h or more, wrecks the car and ends the run.
 - A small steering pull to one side (0.05 × damage^1.5). The first real hit sets the
   side.
 - The paint gets dirty, toward a mud colour. Dust on loose ground adds a little too.
-- Smoke from the engine from 0.35, darker and thicker as the damage increases.
-- Flames from 0.7.
+- Smoke from the engine from 0.35, darker and thicker as the damage increases. Each
+  puff is a little lighter or darker than the next. The smoke is thin while it is over
+  the engine, and a light breeze moves it away from the car. Without this, the smoke
+  from above was one dark shape over the car.
+- Flames from 0.7. They draw after the smoke, so you can see them through it.
 
 ### Parts, restart and events
 
 - The game also divides each hit between six parts, by where the hit was on the car:
   front, rear, left, right, engine and suspension. The parts only control the HUD
   warning lights. Every effect uses the total value.
-- A restart (Enter) repairs the car. No damage carries between stages yet.
+- A restart (Enter) puts the car back as it was at the start of the stage. In the career,
+  damage stays between the two stages of a rally (see [Career](#career)).
 - Events:
   - `damage { part, amount, total, parts, kmh, terminal, stage }` on each hit that
     causes damage;
@@ -922,9 +1026,10 @@ The Blender scripts open the source files as read-only and never save them.
 ### Set up
 
 1. Build the site.
-2. Serve `dist/` under `/backroad-rally/` with a static server. For example, make a
-   folder with a `backroad-rally` link to `dist/`, and serve that folder with
-   `python -m http.server 4173`.
+2. Serve `dist/` under `/backroad-rally/` with `node tools/check/serve.mjs [--port 4173] [--dir dist]`.
+   It works like GitHub Pages: gzip for text files only, `Cache-Control: max-age=600`,
+   ETags and byte ranges. (Any static server works for most checks, but load times and
+   caching are only correct with this one.)
 
 The check scripts use headless Chrome through playwright-core:
 
@@ -971,6 +1076,26 @@ The check scripts use headless Chrome through playwright-core:
   drives into the largest roadside rocks of each type at 40 km/h. It checks that the car
   stops at each rock, does not fly up, and can reverse away. It saves a screenshot at
   each rock.
+- `node tools/check/flash.mjs [--params "stage=finland&autopilot=120&fps=60"] [--seconds 25] [--size 1600x1000] [--rtx] [--webgpu]`
+  opens a headed Chrome at the size of the screen and records two things: the page's own
+  frames (and each change of canvas size), and the frames that the browser composited (a
+  screencast). It prints the auto quality changes, the shaders built after the curtain,
+  the frame gaps over 50 ms after the curtain, and each "blank" frame (more than 60% of
+  the pixels in the page background). `--rtx` starts Chrome on the NVIDIA GPU (see
+  [Browsers](#browsers)).
+- `node tools/check/load.mjs [--mbit 20] [--latency 20] [--stage wales] [--menu-wait 0] [--again]`
+  measures a load on a home connection: a cold cache and a throttled network. It gives
+  the time to the title, to the stage and to the countdown, the bytes and requests, the
+  biggest downloads and any file fetched twice. `--again` does the same visit once more
+  (a returning player).
+- `node tools/check/cachebust.mjs [--file data/fx.json]` builds twice, the second time
+  with one changed file, and checks that only that file gets a new URL.
+- `node tools/check/browsers.mjs --browser chrome|chrome-webgpu|chrome-rtx|chrome-rtx-webgl|firefox`
+  opens the title and drives a quick stage in one browser setup. It prints the backend,
+  the GPU, the auto tier, the frame rate and the console errors.
+- `node tools/check/playthrough.mjs [--stage wales]` does the run actions on one quick
+  stage: the countdown, driving, recover, restart (the rival ghosts must stay), pause and
+  resume, and a DNF with its results.
 - `node tools/check/perf.mjs [--gpu igpu|dgpu] [--sizes 1920x1080,3840x1600] [--seconds 45] [--configs "quality=auto;quality=low"]`
   drives the stage with the autopilot at real time. For each configuration, it prints
   these values:

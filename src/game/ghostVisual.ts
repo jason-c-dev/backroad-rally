@@ -40,10 +40,18 @@ export function ghostMaterial(): THREE.MeshStandardNodeMaterial {
 }
 
 const tmp = new THREE.Color();
-const toLinear = (hex: string) => new THREE.Color().set(hex); // three's Color.set decodes sRGB hex to linear
-
 /** sRGB -> linear on a 0..1 value (the car material decodes its vertex colours once more, materials.ts). */
 const decode = (v: number) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+/**
+ * A hex colour as the ghost material wants it: decoded sRGB -> linear twice, like every vertex colour in the look
+ * (the original decoded its vertex colours twice; materials.ts keeps that, and the car's paint follows it). Decoded
+ * once, the ghosts came out pale and whitish over bright gravel, the best ghost's blue faint.
+ */
+const toLinear = (hex: string) => {
+  const c = new THREE.Color().set(hex); // three's Color.set decodes sRGB hex to linear (once)
+  return c.setRGB(decode(c.r), decode(c.g), decode(c.b));
+};
+
 
 /** A car's geometry merged into one, rest pose, in the car's own space (metres; +X forward). Cached per car. */
 const carGeo = new Map<string, Promise<{ geo: THREE.BufferGeometry; slots: string[]; ranges: number[] }>>();

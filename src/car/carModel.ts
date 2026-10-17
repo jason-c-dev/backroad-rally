@@ -4,7 +4,7 @@
 import * as THREE from 'three/webgpu';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { CarData, Livery } from '../data';
-import { assetUrl } from '../data';
+import { loadGlb } from '../data';
 import { cm } from '../ue';
 import { carMaterial } from '../look/materials';
 
@@ -25,7 +25,7 @@ export interface CarModel {
 const loader = new GLTFLoader();
 
 export async function loadCarModel(car: CarData): Promise<CarModel> {
-  const gltf = await loader.loadAsync(assetUrl(`cars/${car.id}.glb`));
+  const gltf = await loadGlb(loader, `assets/cars/${car.id}.glb`);
   const root = new THREE.Group();
   root.name = car.id;
   root.add(gltf.scene);

@@ -108,6 +108,9 @@ export class CarAudio {
     this.roll.skidTarmac.set(s.skidTarmac, s.skidPitchTarmac, dt);
   }
 
+  /** The limiter cuts scheduled and not yet over: [start, end] on the audio clock. */
+  private curves: [number, number][] = [];
+
   /** Cuts on the audio clock: a volume dip on the bus and an rpm dip (cents) on every layer. */
   private scheduleLimiter(): void {
     const en = this.engine;
@@ -120,8 +123,13 @@ export class CarAudio {
         this.limiterOrigin = -1;
         g.cancelScheduledValues(now);
         d.cancelScheduledValues(now);
-        g.setTargetAtTime(1, now, 0.005);
-        d.setTargetAtTime(0, now, 0.005);
+        // a cut already running keeps going (cancelScheduledValues only drops events that start after now), and
+        // Firefox refuses any other event inside a curve (NotSupportedError): return to rest after it ends
+        const running = this.curves.find(([a, b]) => a < now && b > now);
+        const from = running ? running[1] + 0.001 : now;
+        g.setTargetAtTime(1, from, 0.005);
+        d.setTargetAtTime(0, from, 0.005);
+        this.curves.length = 0;
       }
       return;
     }
@@ -145,6 +153,8 @@ export class CarAudio {
       try {
         g.setValueCurveAtTime(vol, at, len);
         d.setValueCurveAtTime(cents, at, len);
+        this.curves.push([at, at + len]);
+        while (this.curves.length && this.curves[0][1] < now) this.curves.shift();
         this.cutLog.push(at);
         if (this.cutLog.length > 512) this.cutLog.splice(0, 256);
       } catch {

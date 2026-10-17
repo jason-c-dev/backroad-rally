@@ -8,7 +8,7 @@
 // the original rebuilt its diorama behind its curtain (debounced, so scrolling through stages builds only the last).
 // Light on purpose: no crowd, no effects, no engine sound.
 import * as THREE from 'three/webgpu';
-import { load, loadCar, type CameraData } from '../data';
+import { load, loadCar, prefetch, type CameraData } from '../data';
 import { Stage, type CatalogEntry, type StageRuntimeJson } from '../world/stage';
 import { StageFeatures } from '../world/features';
 import { loadCarModel, type CarModel } from '../car/carModel';
@@ -20,7 +20,7 @@ import { createArcade } from '../sim/arcade';
 import { Look } from '../look/look';
 import { CONDITIONS, type ConditionsJson } from '../look/conditions';
 import { QUALITY } from '../look/quality';
-import { AUTO_DEFAULTS, AutoQuality, LADDER, initialRung } from '../look/autoQuality';
+import { AUTO_DEFAULTS, AutoQuality, initialRung, rememberRung, rememberedRung } from '../look/autoQuality';
 import { materialWeather } from '../look/materials';
 import { pickWeather, weatherDef, type WeatherJson } from '../game/weather';
 import { Precipitation } from '../fx/precip';
@@ -155,6 +155,8 @@ export async function runMenu(params: URLSearchParams): Promise<void> {
   const qParam = params.get('quality');
   const pinnedByUrl = !!qParam && qParam !== 'auto' && !!QUALITY[qParam];
   const wantAuto = () => !pinnedByUrl && (qParam === 'auto' || display.quality === 'auto');
+  // the car's model now, beside the stage's files (it was fetched only after the stage was built)
+  if (carWant.car || CAR_IDS[0]) prefetch(`assets/cars/${carWant.car || CAR_IDS[0]}.glb`);
   const { renderer } = await createRenderer(params, params.has('gputime') || wantAuto());
   const [camCfg, catalog, runtime, conditions, rapier, tuningJson] = await Promise.all([
     load<CameraData & { dof: DofJson }>('camera.json'),
@@ -230,15 +232,23 @@ export async function runMenu(params: URLSearchParams): Promise<void> {
   const fpsLimit = () => (params.has('fps') ? Number(params.get('fps')) || 0 : display.fpsLimit);
   limiter.fps = fpsLimit();
   const autoOpts = () => ({ ...AUTO_DEFAULTS, missMs: Math.max(AUTO_DEFAULTS.missMs, limiter.fps > 0 ? (1000 / limiter.fps) * 1.2 : 0) });
-  let auto = wantAuto() ? new AutoQuality(initialRung(gpu, innerWidth * innerHeight * renderer.getPixelRatio() ** 2), autoOpts()) : null;
+  // auto quality: where the last visit to this diorama settled, else a guess; it settles behind the curtain
+  const autoPixels = innerWidth * innerHeight * renderer.getPixelRatio() ** 2;
+  const autoKey = `${innerWidth}x${innerHeight}@${renderer.getPixelRatio().toFixed(2)}`;
+  const autoScene = `menu:${stageId}`;
+  const remembered = params.has('autostart') ? null : rememberedRung(gpu, autoKey, autoScene);
+  // a remembered tier held here before: one clean window confirms it (two for a guess)
+  let auto = wantAuto()
+    ? new AutoQuality(params.has('autostart') ? Number(params.get('autostart')) : remembered ?? initialRung(gpu, autoPixels), { ...autoOpts(), settleGood: remembered !== null ? 1 : 2 })
+    : null;
   const pinnedTier = () => (pinnedByUrl ? qParam! : display.quality === 'auto' ? 'high' : display.quality);
   const night = dio.look?.any?.by_condition?.night?.scale?.headlights?.props;
   const firstCar = car!;
   look = new Look(renderer, scene, orbit.camera, conditions, {
     stage: stageId,
     condition: CONDITIONS.includes(condition as (typeof CONDITIONS)[number]) ? condition : 'afternoon',
-    quality: auto ? LADDER[auto.rung].tier : pinnedTier(),
-    scale: pinnedScale() ?? (auto ? LADDER[auto.rung].scale : 1),
+    quality: auto ? auto.current.tier : pinnedTier(),
+    scale: pinnedScale() ?? (auto ? auto.current.scale : 1),
     upscale: 'browser',
     post: params.get('post') !== '0',
     override: lookOverrides(params),
@@ -255,7 +265,7 @@ export async function runMenu(params: URLSearchParams): Promise<void> {
     limiter.fps = fpsLimit();
     if (wantAuto()) {
       if (!auto) auto = new AutoQuality(initialRung(gpu, innerWidth * innerHeight * (renderer.getPixelRatio() / Math.max(lk.scale, 0.01)) ** 2), autoOpts());
-      lk.setQuality(LADDER[auto.rung].tier, pinnedScale() ?? LADDER[auto.rung].scale);
+      lk.setQuality(auto.current.tier, pinnedScale() ?? auto.current.scale);
     } else {
       auto = null;
       lk.setQuality(pinnedTier(), pinnedScale() ?? 1);
@@ -288,6 +298,8 @@ export async function runMenu(params: URLSearchParams): Promise<void> {
   stage.updateInstances(orbit.camera.position, true, car!.sim.renderPos);
   lk.update(0, car!.sim.renderPos, innerWidth, innerHeight);
   stage.warmup(() => lk.render());
+  /** The tier the warm-up built for: auto quality settling on another draws everything again, behind the curtain. */
+  let warmedTier = lk.qualityName;
 
   const onResize = () => {
     renderer.setSize(innerWidth, innerHeight);
@@ -311,6 +323,7 @@ export async function runMenu(params: URLSearchParams): Promise<void> {
   let stable = 0;
   let fading = false;
   let blurK = 0;
+  let prefetchedRun = false;
   let gpuMs = 0;
   renderer.setAnimationLoop((now: number) => {
     if (!limiter.due(now)) return;
@@ -330,9 +343,31 @@ export async function runMenu(params: URLSearchParams): Promise<void> {
     } else if (!fading) {
       warm += dt;
       stable = frameMs < 40 ? stable + 1 : 0;
-      if ((warm > 0.8 && stable >= 15) || warm > 5) fading = true;
+      // auto quality picks the tier behind the curtain (each step builds shaders): wait for it, up to 14 s
+      if (auto && auto.settled && lk.qualityName !== warmedTier) {
+        stage.warmup(() => lk.render());
+        warmedTier = lk.qualityName;
+      }
+      const settling = !!auto && (!auto.settled || lk.qualityName !== warmedTier);
+      if ((warm > 0.8 && stable >= 15 && !settling) || warm > (settling ? 14 : 5)) {
+        fading = true;
+        if (auto && !auto.playing) {
+          auto.play();
+          if (!params.has('autostart')) rememberRung(gpu, autoKey, autoScene, auto.rung);
+        }
+      }
     } else curtain = Math.max(0, curtain - dt / 0.8);
     br.ready = curtain === 0;
+    // once the menu is up: what a run on this backdrop's stage needs beyond the backdrop itself (the stage's own files
+    // are already in the cache), so pressing start loads faster
+    if (br.ready && !prefetchedRun) {
+      prefetchedRun = true;
+      setTimeout(() => {
+        for (const f of ['fx.json', 'damage.json', 'hud.json', `rival_lines/${stageId}_fwd.json`, `rival_lines/${stageId}_rev.json`]) prefetch(`data/${f}`);
+        for (const c of CAR_IDS) prefetch(`assets/cars/${c}.glb`);
+        void document.fonts?.load('600 16px Inter').catch(() => {});
+      }, 1000);
+    }
 
     const c = car!;
     c.sim.advance(dt, HANDBRAKE);
@@ -348,6 +383,11 @@ export async function runMenu(params: URLSearchParams): Promise<void> {
     padlock.update(dt);
     stage.updateInstances(orbit.camera.position, false, c.sim.renderPos);
     precip?.update(dt, c.sim.renderPos, new THREE.Vector3(1, 0, 0).applyQuaternion(c.sim.renderRot), c.vehicle.velocity, orbit.camera.position, null);
+    // auto quality before drawing: a new render scale clears the canvas, drawn again in the same frame
+    if (auto) {
+      const r = auto.frame(frameMs, gpuMs);
+      if (r !== null) lk.setQuality(r.tier, pinnedScale() ?? r.scale);
+    }
     const cv = renderer.domElement;
     lk.update(dt, c.sim.renderPos, cv.width, cv.height);
     lk.render();
@@ -356,8 +396,6 @@ export async function runMenu(params: URLSearchParams): Promise<void> {
       void renderer.resolveTimestampsAsync('render').then((ms) => {
         if (typeof ms === 'number' && ms > 0) gpuMs = ms;
       });
-      const r = auto.frame(frameMs, gpuMs);
-      if (r !== null) lk.setQuality(LADDER[r].tier, pinnedScale() ?? LADDER[r].scale);
     }
   });
 }
