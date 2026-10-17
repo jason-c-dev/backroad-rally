@@ -35,7 +35,7 @@ import { Menu, menuHref, type MenuDiorama } from './menu';
 import { putMenuState, takeMenuState } from './nav';
 import { Padlock } from './padlock';
 import type { SettingsHost } from './settingsPanel';
-import { busy, nextPaint } from './busy';
+import { busy, GETTING_READY, nextPaint } from './busy';
 
 const HANDBRAKE: DriverInput = { throttle: 0, brake: 0, steer: 0, digitalSteer: false, handbrake: true };
 
@@ -306,7 +306,7 @@ export async function runMenu(params: URLSearchParams): Promise<void> {
   stage.updateInstances(orbit.camera.position, true, car!.sim.renderPos);
   lk.update(0, car!.sim.renderPos, innerWidth, innerHeight);
   // the shaders build now (the main thread is busy for a second or more): say so first
-  menu.setBusy('preparing graphics');
+  menu.setBusy(GETTING_READY);
   await nextPaint();
   stage.warmup(() => lk.render());
   /** The tier the warm-up built for: auto quality settling on another draws everything again, behind the curtain. */

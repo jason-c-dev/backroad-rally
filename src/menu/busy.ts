@@ -29,10 +29,71 @@ export function busy(parent: Element | null, text = 'loading', now = false): HTM
   return e;
 }
 
-/** What is loading: "loading stage", "preparing graphics". */
-export function setBusyText(e: Element | null | undefined, text: string): void {
+/** While the shaders build and auto quality settles (a few seconds on a first visit): rally jobs, in a random order. */
+export const GETTING_READY: readonly string[] = [
+  'warming the engine',
+  'aligning the wheels',
+  'checking the oil',
+  'reading the pace notes',
+  'topping up the fuel',
+  'checking the tyre pressures',
+  'tightening the wheel nuts',
+  'cleaning the windscreen',
+  'briefing the co-driver',
+  'adjusting the mirrors',
+  'fitting the mud flaps',
+  'polishing the headlights',
+  'raking the gravel',
+  'sweeping the stage',
+  'waving the marshals through',
+  'shooing the sheep off the road',
+  'testing the handbrake',
+  'warming the tyres',
+];
+
+/** Seconds that each phrase of a list shows. */
+const PHRASE_S = 2.5;
+const cycles = new WeakMap<Element, number>();
+
+/**
+ * What is loading: a text ("loading stage"), or a list of phrases that the indicator shows in a random order, one
+ * every PHRASE_S. The swap is a timer on the main thread, so a phrase can stay longer while shaders build; the dots
+ * are CSS and keep moving.
+ */
+export function setBusyText(e: Element | null | undefined, text: string | readonly string[]): void {
   const t = e?.querySelector('.t');
-  if (t && t.textContent !== text) t.textContent = text;
+  if (!t) return;
+  const old = cycles.get(t);
+  if (typeof text === 'string') {
+    if (old !== undefined) {
+      clearInterval(old);
+      cycles.delete(t);
+    }
+    if (t.textContent !== text) t.textContent = text;
+    return;
+  }
+  if (old !== undefined || !text.length) return; // already cycling
+  let bag: string[] = [];
+  const next = () => {
+    if (!bag.length) bag = shuffle(text.filter((s) => s !== t.textContent));
+    t.textContent = bag.pop()!;
+  };
+  next();
+  // stops once the curtain or card is gone (display: none), so no timer runs during a stage
+  const id = window.setInterval(() => {
+    if ((t as HTMLElement).offsetParent) return next();
+    clearInterval(id);
+    cycles.delete(t);
+  }, PHRASE_S * 1000);
+  cycles.set(t, id);
+}
+
+function shuffle<T>(a: T[]): T[] {
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
 }
 
 /** Let the page draw once (a new indicator text) before a long task on the main thread. */

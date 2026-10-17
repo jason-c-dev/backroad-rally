@@ -115,8 +115,8 @@ export class StageMenus {
     }
   }
 
-  /** What the indicator says ("loading stage", "preparing graphics"). */
-  setBusy(text: string): void {
+  /** What the indicator says ("loading stage", or the GETTING_READY phrases). */
+  setBusy(text: string | readonly string[]): void {
     setBusyText(this.busyEl, text);
   }
 

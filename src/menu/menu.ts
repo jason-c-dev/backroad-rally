@@ -660,8 +660,8 @@ export class Menu {
     }, 200);
   }
 
-  /** What the curtain's indicator says ("loading", "preparing graphics"). */
-  setBusy(text: string): void {
+  /** What the curtain's indicator says ("loading", or the GETTING_READY phrases). */
+  setBusy(text: string | readonly string[]): void {
     setBusyText(this.busyEl, text);
   }
 

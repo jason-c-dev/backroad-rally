@@ -137,8 +137,8 @@ three dots that pulse, in Inter, in the soft ink of the menus (`src/menu/busy.ts
 | Where | Text | Position |
 |---|---|---|
 | The first load, before the game code starts | loading | On the curtain, to the right of where the menu panel comes |
-| The menus while the backdrop builds or changes (another location or weather) | loading, then preparing graphics | On the curtain, halfway between the right edge of the panel and the right edge of the screen |
-| The loading card of a stage | loading stage, then preparing graphics | In the card, where the card had "loading" |
+| The menus while the backdrop builds or changes (another location or weather) | loading, then rally phrases (see below) | On the curtain, halfway between the right edge of the panel and the right edge of the screen |
+| The loading card of a stage | loading stage, then rally phrases (see below) | In the card, where the card had "loading" |
 | Quit to the menu, or a career rally that is complete | loading | On the curtain |
 | The career's next stage | loading stage | In the loading card of the next stage, which comes down over the results |
 | The garage, while the model of another car downloads | loading car | Over the car, on a small light panel |
@@ -155,8 +155,13 @@ These rules apply:
   next page, with the indicator already on. Thus the screen does not go blank between
   the pages, and the indicator does not wait again.
 - The animation changes only the opacity. The browser's compositor runs it, so the dots
-  keep their movement while the main thread builds shaders. The game sets the text
-  "preparing graphics" and lets the page draw one frame before the warm-up starts.
+  keep their movement while the main thread builds shaders. Before the warm-up starts,
+  the game changes the text and lets the page draw one frame.
+- During the shader warm-up and the auto quality settle, the text is a rally phrase,
+  for example "warming the engine", "checking the oil" or "reading the pace notes"
+  (`GETTING_READY` in `src/menu/busy.ts`, 18 phrases). A new phrase comes every 2.5 s,
+  in a random order with no repeat until all have shown. A timer on the main thread
+  changes the phrase, so a phrase can stay longer while shaders build.
 - The indicator is in the curtain or in the card. It fades with them (0.6 s on a stage,
   0.8 s in the menus). When they are gone it has `display: none`, so it costs nothing
   during a run.
