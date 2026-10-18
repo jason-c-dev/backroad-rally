@@ -2,6 +2,8 @@ node_modules/
 dist/
 # private planning notes (own local git repo; never published)
 private/
+# the maintainer's local Claude Code notes (point into private/)
+CLAUDE.local.md
 .env
 shots/
 __pycache__/

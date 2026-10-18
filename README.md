@@ -147,6 +147,9 @@ npm run build           # production build into dist/
 The [technical reference](docs/reference.md) has the details: URL options, quality
 tiers, effects, damage, HUD, audio, tests, asset conversion and browser checks.
 
+To continue the game with Claude Code, start it in the repo folder. [CLAUDE.md](CLAUDE.md)
+tells it where to begin.
+
 ## Credits
 
 - Inspired by [art of rally](https://artofrally.com/) by Funselektor Labs. This project has no
