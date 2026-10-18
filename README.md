@@ -28,6 +28,7 @@
 ![Assets](https://img.shields.io/badge/assets-Blender-e87d0d?logo=blender&logoColor=white)
 ![Audio](https://img.shields.io/badge/audio-ElevenLabs_%2B_synth-000000)
 [![Built with](https://img.shields.io/badge/built_with-Claude_Code-d97757?logo=claude&logoColor=white)](https://claude.com/claude-code)
+[![Mentioned in Awesome AI-Built Games](https://awesome.re/mentioned-badge.svg)](https://github.com/lappemic/awesome-ai-built-games)
 [![Last commit](https://img.shields.io/github/last-commit/jason-c-dev/backroad-rally)](https://github.com/jason-c-dev/backroad-rally/commits/main)
 
 A small top-down rally game with a diorama look, for the browser. It is a free,
